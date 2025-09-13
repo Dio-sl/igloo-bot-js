@@ -68,6 +68,9 @@ module.exports = {
 // Updated createTicket function for the dropdown with clean channel names
 
 // Function to directly create a ticket from the dropdown selection
+// Updated createTicket function for the dropdown
+
+// Function to directly create a ticket from the dropdown selection
 async function createTicket(interaction, client, categoryValue) {
   try {
     const guild = interaction.guild;
@@ -76,6 +79,9 @@ async function createTicket(interaction, client, categoryValue) {
 
     // Get category info
     const categoryInfo = getCategoryInfo(categoryValue);
+    
+    // Use the same blue color for all tickets
+    const IGLOO_BLUE = 0x0CAFFF; // Bright cyan/blue for all tickets
 
     // Check if user has too many open tickets
     const openTicketsResult = await db.query(
@@ -84,7 +90,7 @@ async function createTicket(interaction, client, categoryValue) {
     );
 
     const openTicketCount = parseInt(openTicketsResult.rows[0].count);
-
+    
     // Get guild config
     const configResult = await db.query(
       'SELECT * FROM ticket_config WHERE guild_id = $1',
@@ -104,7 +110,7 @@ async function createTicket(interaction, client, categoryValue) {
     // Generate ticket ID
     const ticketNumber = await getNextTicketNumber(guild.id);
     const ticketId = `${config.ticket_prefix}-${ticketNumber.toString().padStart(4, '0')}`;
-
+    
     // Create clean channel name without emoji prefix
     const channelName = `ticket-${ticketNumber.toString().padStart(4, '0')}`.toLowerCase();
 
@@ -158,46 +164,37 @@ async function createTicket(interaction, client, categoryValue) {
       [ticketId, guild.id, userId, ticketChannel.id, categoryInfo.label, 'open']
     );
 
-    // CATEGORY COLORS - ADD THESE NEAR THE TOP OF YOUR FILE
-    const CATEGORY_COLORS = {
-      'Buy': 0x4CAF50,           // Green
-      'General Support': 0x2196F3, // Blue
-      'Order Issues': 0xFF9800,    // Orange
-      'Technical Support': 0x9C27B0 // Purple
-    };
-    const categoryColor = CATEGORY_COLORS[categoryInfo.label] || 0x0CAFFF;
-
-    // Create IMPROVED welcome embed
+    // Create FINAL clean welcome embed - using same blue color and no extra space
     const timestamp = Math.floor(Date.now() / 1000);
     const welcomeEmbed = new EmbedBuilder()
-      .setAuthor({
-        name: ticketId,
-        iconURL: client.user.displayAvatarURL()
+      .setColor(IGLOO_BLUE) // Same blue color for all categories
+      .setAuthor({ 
+        name: `Ticket: ${ticketId}`, 
+        iconURL: client.user.displayAvatarURL() 
       })
-      .setTitle(`${categoryInfo.emoji} ${categoryInfo.label} Support`)
       .setDescription(
-        config.welcome_message ||
-        `Thank you for creating a ticket! Our support team will be with you shortly.\n\n` +
-        `Please provide any additional details that might help us assist you better.`
+        `Thank you for creating a ticket! Our support team will be with you shortly.
+Please provide any additional details that might help us assist you better.`
       )
-      .setColor(categoryColor)
       .addFields([
         {
           name: 'Ticket Information',
-          value:
-            `**Category:** ${categoryInfo.label}\n` +
+          value: 
+            `**Category:** ${categoryInfo.emoji} ${categoryInfo.label}\n` +
             `**Created by:** <@${userId}>\n` +
             `**Status:** 🔵 Open\n` +
             `**Created:** <t:${timestamp}:R>`
-        },
-        {
-          name: 'Description',
-          value: description
         }
       ])
-      .setFooter({
+      // Only add description field if it's not the default
+      .addFields(
+        description !== 'No description provided' 
+          ? [{ name: 'Description', value: description }]
+          : []
+      )
+      .setFooter({ 
         text: 'Igloo Support System',
-        iconURL: client.user.displayAvatarURL()
+        iconURL: client.user.displayAvatarURL() 
       })
       .setTimestamp();
 
