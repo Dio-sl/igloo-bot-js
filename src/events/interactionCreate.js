@@ -222,9 +222,9 @@ Please provide any additional details that might help us assist you better.`
           .setStyle(ButtonStyle.Danger)
       );
 
-    // Send welcome message to ticket channel
+    // Send welcome message to ticket channel WITHOUT role mention
     await ticketChannel.send({
-      content: config.support_role_id ? `<@&${config.support_role_id}>` : undefined,
+      content: null, // No role mention
       embeds: [welcomeEmbed],
       components: [actionRow],
     });
