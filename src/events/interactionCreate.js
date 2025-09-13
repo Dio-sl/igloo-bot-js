@@ -41,7 +41,8 @@ module.exports = {
 
           // We'll handle the ticket creation directly here instead of trying to reuse the command
           // This fixes the "ticketCreateCmd.execute is not a function" error
-          await createTicket(interaction, client, categoryInfo);
+          // Pass just the category value, not the entire categoryInfo object
+          await createTicket(interaction, client, selected);
 
         } catch (error) {
           logger.error('Error handling ticket category select:', error);
