@@ -38,11 +38,11 @@ module.exports = {
 
           // Get category display info
           const categoryInfo = getCategoryInfo(selected);
-          
+
           // We'll handle the ticket creation directly here instead of trying to reuse the command
           // This fixes the "ticketCreateCmd.execute is not a function" error
           await createTicket(interaction, client, categoryInfo);
-          
+
         } catch (error) {
           logger.error('Error handling ticket category select:', error);
           try {
@@ -65,23 +65,17 @@ module.exports = {
 // Copy this entire function and replace your existing createTicket function
 
 // Function to directly create a ticket from the dropdown selection
+// Updated createTicket function for the dropdown with clean channel names
+
+// Function to directly create a ticket from the dropdown selection
 async function createTicket(interaction, client, categoryValue) {
   try {
     const guild = interaction.guild;
     const userId = interaction.user.id;
     const description = 'No description provided'; // Default for dropdown selection
 
-    // CATEGORY COLORS - ADD THESE NEAR THE TOP OF YOUR FILE
-    const CATEGORY_COLORS = {
-      'Buy': 0x4CAF50,           // Green
-      'General Support': 0x2196F3, // Blue
-      'Order Issues': 0xFF9800,    // Orange
-      'Technical Support': 0x9C27B0 // Purple
-    };
-
     // Get category info
     const categoryInfo = getCategoryInfo(categoryValue);
-    const categoryColor = CATEGORY_COLORS[categoryInfo.label] || 0x0CAFFF;
 
     // Check if user has too many open tickets
     const openTicketsResult = await db.query(
@@ -90,7 +84,7 @@ async function createTicket(interaction, client, categoryValue) {
     );
 
     const openTicketCount = parseInt(openTicketsResult.rows[0].count);
-    
+
     // Get guild config
     const configResult = await db.query(
       'SELECT * FROM ticket_config WHERE guild_id = $1',
@@ -111,9 +105,12 @@ async function createTicket(interaction, client, categoryValue) {
     const ticketNumber = await getNextTicketNumber(guild.id);
     const ticketId = `${config.ticket_prefix}-${ticketNumber.toString().padStart(4, '0')}`;
 
+    // Create clean channel name without emoji prefix
+    const channelName = `ticket-${ticketNumber.toString().padStart(4, '0')}`.toLowerCase();
+
     // Create ticket channel
     const ticketChannel = await guild.channels.create({
-      name: `${categoryInfo.emoji}-${ticketId.toLowerCase()}`,
+      name: channelName, // Clean channel name without emoji
       type: ChannelType.GuildText,
       parent: config.ticket_category_id || null,
       topic: `Support ticket for ${interaction.user.tag} | Category: ${categoryInfo.label}`,
@@ -161,16 +158,25 @@ async function createTicket(interaction, client, categoryValue) {
       [ticketId, guild.id, userId, ticketChannel.id, categoryInfo.label, 'open']
     );
 
+    // CATEGORY COLORS - ADD THESE NEAR THE TOP OF YOUR FILE
+    const CATEGORY_COLORS = {
+      'Buy': 0x4CAF50,           // Green
+      'General Support': 0x2196F3, // Blue
+      'Order Issues': 0xFF9800,    // Orange
+      'Technical Support': 0x9C27B0 // Purple
+    };
+    const categoryColor = CATEGORY_COLORS[categoryInfo.label] || 0x0CAFFF;
+
     // Create IMPROVED welcome embed
     const timestamp = Math.floor(Date.now() / 1000);
     const welcomeEmbed = new EmbedBuilder()
-      .setAuthor({ 
-        name: ticketId, 
-        iconURL: client.user.displayAvatarURL() 
+      .setAuthor({
+        name: ticketId,
+        iconURL: client.user.displayAvatarURL()
       })
       .setTitle(`${categoryInfo.emoji} ${categoryInfo.label} Support`)
       .setDescription(
-        config.welcome_message || 
+        config.welcome_message ||
         `Thank you for creating a ticket! Our support team will be with you shortly.\n\n` +
         `Please provide any additional details that might help us assist you better.`
       )
@@ -178,7 +184,7 @@ async function createTicket(interaction, client, categoryValue) {
       .addFields([
         {
           name: 'Ticket Information',
-          value: 
+          value:
             `**Category:** ${categoryInfo.label}\n` +
             `**Created by:** <@${userId}>\n` +
             `**Status:** 🔵 Open\n` +
@@ -189,9 +195,9 @@ async function createTicket(interaction, client, categoryValue) {
           value: description
         }
       ])
-      .setFooter({ 
+      .setFooter({
         text: 'Igloo Support System',
-        iconURL: client.user.displayAvatarURL() 
+        iconURL: client.user.displayAvatarURL()
       })
       .setTimestamp();
 
@@ -465,6 +471,9 @@ async function handleTicketButton(interaction, client) {
 }
 
 // Implementations of ticket button handlers (these are the same as your existing code)
+// Updated ticket button handlers with clean channel names
+
+// Update the handleClaimTicket function
 async function handleClaimTicket(interaction, ticket) {
   // Check if user has permission to claim tickets
   const member = interaction.guild.members.cache.get(interaction.user.id);
@@ -506,9 +515,12 @@ async function handleClaimTicket(interaction, ticket) {
     [interaction.user.id, ticket.id]
   );
 
-  // Update channel name
+  // Extract the ticket number to maintain clean channel naming
+  const ticketNumber = ticket.ticket_id.split('-')[1];
+
+  // Update channel name with clean format - claimed
   const channel = interaction.channel;
-  await channel.setName(`👤-${ticket.ticket_id.toLowerCase()}`);
+  await channel.setName(`claimed-${ticketNumber.toLowerCase()}`);
 
   // Send confirmation
   const embed = new EmbedBuilder()
@@ -520,6 +532,83 @@ async function handleClaimTicket(interaction, ticket) {
   await interaction.reply({ embeds: [embed] });
 
   logger.info(`Ticket ${ticket.ticket_id} claimed by ${interaction.user.tag}`);
+}
+
+// Update the handleCloseTicket function
+async function handleCloseTicket(interaction, ticket) {
+  // Check if user can close the ticket
+  const isTicketOwner = ticket.user_id === interaction.user.id;
+  const isStaff = interaction.memberPermissions?.has(PermissionFlagsBits.ManageThreads);
+  const isClaimer = ticket.claimed_by === interaction.user.id;
+
+  if (!isTicketOwner && !isStaff && !isClaimer) {
+    await interaction.reply({
+      content: 'You do not have permission to close this ticket!',
+      ephemeral: true,
+    });
+    return;
+  }
+
+  if (ticket.status === 'closed') {
+    await interaction.reply({
+      content: 'This ticket is already closed!',
+      ephemeral: true,
+    });
+    return;
+  }
+
+  // Update ticket in database
+  await db.query(
+    `UPDATE tickets 
+     SET status = 'closed', 
+         closed_by = $1, 
+         closed_at = CURRENT_TIMESTAMP,
+         updated_at = CURRENT_TIMESTAMP 
+     WHERE id = $2`,
+    [interaction.user.id, ticket.id]
+  );
+
+  // Extract the ticket number to maintain clean channel naming
+  const ticketNumber = ticket.ticket_id.split('-')[1];
+
+  // Update channel name with clean format - closed
+  const channel = interaction.channel;
+  await channel.setName(`closed-${ticketNumber.toLowerCase()}`);
+
+  // Remove send messages permission for ticket owner
+  await channel.permissionOverwrites.edit(ticket.user_id, {
+    SendMessages: false,
+  });
+
+  // Send confirmation
+  const embed = new EmbedBuilder()
+    .setTitle('🔒 Ticket Closed')
+    .setDescription(`This ticket has been closed by <@${interaction.user.id}>`)
+    .setColor(0xFF0000)
+    .setTimestamp()
+    .setFooter({ text: 'This channel will be deleted in 5 minutes if not reopened.' });
+
+  await interaction.reply({ embeds: [embed] });
+
+  logger.info(`Ticket ${ticket.ticket_id} closed by ${interaction.user.tag}`);
+
+  // Schedule deletion after 5 minutes
+  setTimeout(async () => {
+    // Check if ticket is still closed
+    const checkResult = await db.query(
+      'SELECT status FROM tickets WHERE id = $1',
+      [ticket.id]
+    );
+
+    if (checkResult.rows[0]?.status === 'closed') {
+      try {
+        await channel.delete('Ticket closed for more than 5 minutes');
+        await db.query('DELETE FROM tickets WHERE id = $1', [ticket.id]);
+      } catch (error) {
+        logger.error(`Failed to delete closed ticket channel: ${error}`);
+      }
+    }
+  }, 5 * 60 * 1000); // 5 minutes
 }
 
 async function handleCloseTicket(interaction, ticket) {
@@ -627,32 +716,32 @@ async function handleDeleteTicket(interaction, ticket) {
 // Function to get category information
 function getCategoryInfo(categoryValue) {
   const categories = {
-    'buy': { 
-      label: 'Buy', 
-      emoji: '🛒', 
+    'buy': {
+      label: 'Buy',
+      emoji: '🛒',
       description: 'Click for making a purchase',
       color: 0x4CAF50 // Green
     },
-    'general': { 
-      label: 'General Support', 
-      emoji: '🧊', 
+    'general': {
+      label: 'General Support',
+      emoji: '🧊',
       description: 'General questions and help',
       color: 0x2196F3 // Blue
     },
-    'order': { 
-      label: 'Order Issues', 
-      emoji: '📦', 
+    'order': {
+      label: 'Order Issues',
+      emoji: '📦',
       description: 'Problems with orders',
       color: 0xFF9800 // Orange
     },
-    'technical': { 
-      label: 'Technical Support', 
-      emoji: '⚙️', 
+    'technical': {
+      label: 'Technical Support',
+      emoji: '⚙️',
       description: 'Technical difficulties',
       color: 0x9C27B0 // Purple
     }
   };
-  
+
   return categories[categoryValue] || categories['general'];
 }
 
