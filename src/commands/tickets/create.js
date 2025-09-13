@@ -136,19 +136,20 @@ module.exports = {
         });
       }
 
-      // Save ticket to database
+      // Save ticket to database with the correct category
       await db.query(
         `INSERT INTO tickets (ticket_id, guild_id, user_id, channel_id, category, status)
          VALUES ($1, $2, $3, $4, $5, $6)`,
-        [ticketId, guild.id, userId, ticketChannel.id, categoryInfo.label, 'open']
+        [ticketId, guild.id, userId, ticketChannel.id, ticketCategory, 'open']
       );
 
       // Create FINAL clean welcome embed - using same blue color and no extra space
+      // Fixed title layout and ensuring correct category is displayed
       const timestamp = Math.floor(Date.now() / 1000);
       const welcomeEmbed = new EmbedBuilder()
         .setColor(IGLOO_COLORS.PRIMARY) // Same blue color for all categories
         .setAuthor({ 
-          name: `Ticket: ${ticketId}`, 
+          name: ticketId, // Just the ticket ID without "Ticket:" prefix
           iconURL: client.user.displayAvatarURL() 
         })
         .setDescription(
