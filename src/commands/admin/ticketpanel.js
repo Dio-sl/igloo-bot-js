@@ -33,21 +33,20 @@ module.exports = {
     
     // Create branded embed with ice theme
     const panelEmbed = new EmbedBuilder()
-      .setTitle('❄️ Igloo Support System')
+      .setTitle('❄️ Igloo. Ticket Panel')
       .setDescription(
-        '**Welcome to our support system!**\n\n' +
-        'Need help? Have a question? Want to report an issue?\n' +
-        'Click the button below to create a private support ticket.\n\n' +
+        
+        'Need help? Have a question? Want to report an issue?' +
+        ' Click the button below to create a private support ticket.\n\n' +
         '**What happens next:**\n' +
         '• A private ticket channel will be created\n' +
         '• Our support team will be notified\n' +
         '• You\'ll receive assistance as soon as possible\n\n' +
         '**Ticket Categories:**\n' +
+        '🛒 **Buy** - Click for making a purchase\n' +
         '🧊 **General Support** - General questions and help\n' +
         '📦 **Order Issues** - Problems with orders\n' +
-        '💳 **Payment Problems** - Billing and payment issues\n' +
-        '⚙️ **Technical Support** - Technical difficulties\n' +
-        '❓ **Other** - Everything else'
+        '⚙️ **Technical Support** - Technical difficulties\n'
       )
       .setColor(IGLOO_BLUE)
       .setThumbnail(interaction.guild.iconURL({ dynamic: true }))
