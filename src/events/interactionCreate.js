@@ -71,6 +71,9 @@ module.exports = {
 // Updated createTicket function for the dropdown
 
 // Function to directly create a ticket from the dropdown selection
+// Updated createTicket function for the dropdown with fixed title and category
+
+// Function to directly create a ticket from the dropdown selection
 async function createTicket(interaction, client, categoryValue) {
   try {
     const guild = interaction.guild;
@@ -157,19 +160,19 @@ async function createTicket(interaction, client, categoryValue) {
       });
     }
 
-    // Save ticket to database
+    // Save ticket to database with the correct category
     await db.query(
       `INSERT INTO tickets (ticket_id, guild_id, user_id, channel_id, category, status)
        VALUES ($1, $2, $3, $4, $5, $6)`,
-      [ticketId, guild.id, userId, ticketChannel.id, categoryInfo.label, 'open']
+      [ticketId, guild.id, userId, ticketChannel.id, categoryValue, 'open']
     );
 
-    // Create FINAL clean welcome embed - using same blue color and no extra space
+    // Create FINAL clean welcome embed - with fixed title and category
     const timestamp = Math.floor(Date.now() / 1000);
     const welcomeEmbed = new EmbedBuilder()
       .setColor(IGLOO_BLUE) // Same blue color for all categories
       .setAuthor({ 
-        name: `Ticket: ${ticketId}`, 
+        name: ticketId, // Just the ticket ID without "Ticket:" prefix
         iconURL: client.user.displayAvatarURL() 
       })
       .setDescription(
