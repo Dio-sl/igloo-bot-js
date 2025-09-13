@@ -1,4 +1,4 @@
-// Fixed interaction handler for the ticket category selection
+// Fixed interaction handler for the ticket category selection with proper imports
 const {
   Events,
   PermissionFlagsBits,
@@ -7,7 +7,8 @@ const {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
-  StringSelectMenuBuilder
+  StringSelectMenuBuilder,
+  ChannelType // Added this import which was missing
 } = require('discord.js');
 const { logger } = require('../utils/logger');
 const { db } = require('../database/Database');
@@ -98,7 +99,7 @@ async function createTicket(interaction, client, categoryInfo) {
     const ticketChannel = await guild.channels.create({
       name: `${categoryInfo.emoji}-${ticketId.toLowerCase()}`,
       type: ChannelType.GuildText,
-      parent: config.ticket_category_id || undefined,
+      parent: config.ticket_category_id || null,
       topic: `Support ticket for ${interaction.user.tag} | Category: ${categoryInfo.label}`,
       permissionOverwrites: [
         {
