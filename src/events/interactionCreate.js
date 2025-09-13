@@ -61,11 +61,27 @@ module.exports = {
 };
 
 // Function to directly create a ticket from the dropdown selection
-async function createTicket(interaction, client, categoryInfo) {
+// REPLACEMENT FOR THE createTicket FUNCTION IN interactionCreate.js
+// Copy this entire function and replace your existing createTicket function
+
+// Function to directly create a ticket from the dropdown selection
+async function createTicket(interaction, client, categoryValue) {
   try {
     const guild = interaction.guild;
     const userId = interaction.user.id;
     const description = 'No description provided'; // Default for dropdown selection
+
+    // CATEGORY COLORS - ADD THESE NEAR THE TOP OF YOUR FILE
+    const CATEGORY_COLORS = {
+      'Buy': 0x4CAF50,           // Green
+      'General Support': 0x2196F3, // Blue
+      'Order Issues': 0xFF9800,    // Orange
+      'Technical Support': 0x9C27B0 // Purple
+    };
+
+    // Get category info
+    const categoryInfo = getCategoryInfo(categoryValue);
+    const categoryColor = CATEGORY_COLORS[categoryInfo.label] || 0x0CAFFF;
 
     // Check if user has too many open tickets
     const openTicketsResult = await db.query(
@@ -145,22 +161,39 @@ async function createTicket(interaction, client, categoryInfo) {
       [ticketId, guild.id, userId, ticketChannel.id, categoryInfo.label, 'open']
     );
 
-    // Create welcome embed with ice theme
+    // Create IMPROVED welcome embed
+    const timestamp = Math.floor(Date.now() / 1000);
     const welcomeEmbed = new EmbedBuilder()
-      .setTitle(`${categoryInfo.emoji} ${ticketId}`)
-      .setDescription(config.welcome_message || 'Thank you for creating a ticket! Our support team will be with you shortly.')
-      .addFields(
-        { name: 'Category', value: categoryInfo.label, inline: true },
-        { name: 'Created by', value: `<@${userId}>`, inline: true },
-        { name: 'Status', value: '🔵 Open', inline: true },
-        { name: 'Description', value: description }
+      .setAuthor({ 
+        name: ticketId, 
+        iconURL: client.user.displayAvatarURL() 
+      })
+      .setTitle(`${categoryInfo.emoji} ${categoryInfo.label} Support`)
+      .setDescription(
+        config.welcome_message || 
+        `Thank you for creating a ticket! Our support team will be with you shortly.\n\n` +
+        `Please provide any additional details that might help us assist you better.`
       )
-      .setColor(categoryInfo.color || 0x0CAFFF)
-      .setTimestamp()
+      .setColor(categoryColor)
+      .addFields([
+        {
+          name: 'Ticket Information',
+          value: 
+            `**Category:** ${categoryInfo.label}\n` +
+            `**Created by:** <@${userId}>\n` +
+            `**Status:** 🔵 Open\n` +
+            `**Created:** <t:${timestamp}:R>`
+        },
+        {
+          name: 'Description',
+          value: description
+        }
+      ])
       .setFooter({ 
         text: 'Igloo Support System',
-        iconURL: client.user.displayAvatarURL()
-      });
+        iconURL: client.user.displayAvatarURL() 
+      })
+      .setTimestamp();
 
     // Create action buttons with ice theme styling
     const actionRow = new ActionRowBuilder()
