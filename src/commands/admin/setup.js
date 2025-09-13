@@ -1261,121 +1261,508 @@ async function handleGeneralSetupMenu(interaction, client, config) {
 /**
  * Prompt for channel selection
  */
+/**
+ * Prompt for channel selection using a dropdown menu
+ */
 async function promptChannelSelection(interaction, prompt, setting, types) {
   const guildId = interaction.guild.id;
+  
+  // Get available channels of the specified types
+  const availableChannels = interaction.guild.channels.cache
+    .filter(channel => types.includes(channel.type))
+    .map(channel => ({
+      label: channel.name.substring(0, 25), // Discord has 25 char limit on labels
+      value: channel.id,
+      description: `#${channel.name.substring(0, 45)}`,  // 50 char limit on description
+    }))
+    .slice(0, 25); // Discord has 25 option limit
+  
+  // If no channels of the required type exist
+  if (availableChannels.length === 0) {
+    return await interaction.reply({
+      content: `❌ No ${types.includes(ChannelType.GuildCategory) ? 'categories' : 'text channels'} found in this server. Please create one first.`,
+      ephemeral: true,
+    });
+  }
   
   // Create the prompt embed
   const embed = new EmbedBuilder()
     .setColor(COLORS.PRIMARY)
     .setTitle('Channel Selection')
-    .setDescription(prompt)
-    .setFooter({ text: 'Use /setup command to cancel and start over.' });
+    .setDescription(prompt);
   
-  await interaction.reply({
+  // Create the channel select menu
+  const selectRow = new ActionRowBuilder()
+    .addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId('setup_channel_select')
+        .setPlaceholder('Select a channel')
+        .addOptions(availableChannels)
+    );
+  
+  // Add cancel button
+  const buttonRow = new ActionRowBuilder()
+    .addComponents(
+      new ButtonBuilder()
+        .setCustomId('setup_cancel')
+        .setLabel('Cancel')
+        .setStyle(ButtonStyle.Secondary)
+        .setEmoji('✖️')
+    );
+  
+  const response = await interaction.reply({
     embeds: [embed],
+    components: [selectRow, buttonRow],
     ephemeral: true,
   });
   
-  // Create a message collector for the next message from this user
-  const filter = m => m.author.id === interaction.user.id;
-  const collector = interaction.channel.createMessageCollector({ 
-    filter, 
-    max: 1, 
-    time: 60000 
+  // Create collector for the selection
+  const collector = response.createMessageComponentCollector({ 
+    time: 60000 // 1 minute
   });
   
-  collector.on('collect', async message => {
-    // Delete the user's message to keep the channel clean
-    try {
-      await message.delete();
-    } catch (error) {
-      logger.warn('Could not delete message during setup:', error);
-    }
-    
-    // Check if the message mentions a channel
-    const channelMention = message.mentions.channels.first();
-    
-    if (!channelMention) {
-      await interaction.followUp({
-        content: '❌ Please mention a valid channel. Setup canceled - use /setup to start again.',
-        ephemeral: true,
-      });
-      return;
-    }
-    
-    // Check if the channel is of the correct type
-    if (types && !types.includes(channelMention.type)) {
-      await interaction.followUp({
-        content: `❌ The channel must be of the following type(s): ${types.join(', ')}. Setup canceled - use /setup to start again.`,
-        ephemeral: true,
-      });
-      return;
-    }
-    
-    try {
-      // Save the channel ID to the database based on the setting
-      let updateField;
+  collector.on('collect', async componentInteraction => {
+    // Handle channel selection
+    if (componentInteraction.customId === 'setup_channel_select') {
+      const channelId = componentInteraction.values[0];
+      const channel = interaction.guild.channels.cache.get(channelId);
       
-      switch (setting) {
-        case 'ticket_category':
-          updateField = 'ticket_category_id';
-          break;
-        case 'ticket_logs':
-          updateField = 'log_channel_id';
-          break;
-        case 'shop_channel':
-          updateField = 'shop_channel_id';
-          break;
-        case 'announcement_channel':
-          updateField = 'announcement_channel_id';
-          break;
-        default:
-          throw new Error('Unknown setting');
-      }
-      
-      // Get current config
-      const configResult = await db.query(
-        'SELECT * FROM guild_config WHERE guild_id = $1',
-        [guildId]
-      );
-      
-      if (configResult.rows.length === 0) {
-        // Insert new config
-        await db.query(
-          `INSERT INTO guild_config (guild_id, ${updateField})
-           VALUES ($1, $2)`,
-          [guildId, channelMention.id]
+      try {
+        // Save the channel ID to the database based on the setting
+        let updateField;
+        
+        switch (setting) {
+          case 'ticket_category':
+            updateField = 'ticket_category_id';
+            break;
+          case 'ticket_logs':
+            updateField = 'log_channel_id';
+            break;
+          case 'shop_channel':
+            updateField = 'shop_channel_id';
+            break;
+          case 'announcement_channel':
+            updateField = 'announcement_channel_id';
+            break;
+          default:
+            throw new Error('Unknown setting');
+        }
+        
+        // Get current config
+        const configResult = await db.query(
+          'SELECT * FROM guild_config WHERE guild_id = $1',
+          [guildId]
         );
-      } else {
-        // Update existing config
-        await db.query(
-          `UPDATE guild_config
-           SET ${updateField} = $1
-           WHERE guild_id = $2`,
-          [channelMention.id, guildId]
-        );
+        
+        if (configResult.rows.length === 0) {
+          // Insert new config
+          await db.query(
+            `INSERT INTO guild_config (guild_id, ${updateField})
+             VALUES ($1, $2)`,
+            [guildId, channelId]
+          );
+        } else {
+          // Update existing config
+          await db.query(
+            `UPDATE guild_config
+             SET ${updateField} = $1
+             WHERE guild_id = $2`,
+            [channelId, guildId]
+          );
+        }
+        
+        // Confirm the update
+        const successEmbed = new EmbedBuilder()
+          .setColor(COLORS.SUCCESS)
+          .setTitle('✅ Channel Set')
+          .setDescription(`Successfully set ${setting.replace('_', ' ')} to ${channel}!`)
+          .setFooter({ text: 'You can continue with other configuration options.' });
+        
+        await componentInteraction.update({
+          embeds: [successEmbed],
+          components: [],
+        });
+        
+        // After a short delay, go back to the appropriate setup menu
+        setTimeout(async () => {
+          const config = await getGuildConfig(guildId);
+          
+          if (setting === 'ticket_category' || setting === 'ticket_logs') {
+            await handleTicketSetupMenu(componentInteraction, client, config);
+          } else if (setting === 'shop_channel') {
+            await handleShopSetupMenu(componentInteraction, client, config);
+          } else if (setting === 'announcement_channel') {
+            await handleGeneralSetupMenu(componentInteraction, client, config);
+          }
+        }, 2000); // 2 second delay
+      } catch (error) {
+        logger.error('Error saving channel setting:', error);
+        await componentInteraction.update({
+          content: '❌ An error occurred while saving your setting. Please try again.',
+          embeds: [],
+          components: [],
+        });
       }
+    }
+    
+    // Handle cancel button
+    if (componentInteraction.customId === 'setup_cancel') {
+      const config = await getGuildConfig(guildId);
       
-      // Confirm the update
-      await interaction.followUp({
-        content: `✅ Successfully set ${setting.replace('_', ' ')} to ${channelMention}!`,
-        ephemeral: true,
-      });
-    } catch (error) {
-      logger.error('Error saving channel setting:', error);
-      await interaction.followUp({
-        content: '❌ An error occurred while saving your setting. Please try again.',
-        ephemeral: true,
-      });
+      if (setting === 'ticket_category' || setting === 'ticket_logs') {
+        await handleTicketSetupMenu(componentInteraction, client, config);
+      } else if (setting === 'shop_channel') {
+        await handleShopSetupMenu(componentInteraction, client, config);
+      } else if (setting === 'announcement_channel') {
+        await handleGeneralSetupMenu(componentInteraction, client, config);
+      }
     }
   });
   
-  collector.on('end', collected => {
+  collector.on('end', async (collected) => {
     if (collected.size === 0) {
-      interaction.followUp({
-        content: '❌ No channel was selected within the time limit. Setup canceled - use /setup to start again.',
-        ephemeral: true,
-      });
+      // Timeout - update the message
+      const timeoutEmbed = new EmbedBuilder()
+        .setColor(COLORS.DANGER)
+        .setTitle('⏱️ Timed Out')
+        .setDescription('Channel selection timed out. Please try again.');
+      
+      await interaction.editReply({
+        embeds: [timeoutEmbed],
+        components: [],
+      }).catch(err => logger.error('Error updating timed out channel selection:', err));
+    }
+  });
+}
+
+/**
+ * Prompt for role selection using a dropdown menu
+ */
+async function promptRoleSelection(interaction, prompt) {
+  const guildId = interaction.guild.id;
+  
+  // Get available roles (excluding @everyone)
+  const availableRoles = interaction.guild.roles.cache
+    .filter(role => role.id !== interaction.guild.id) // Filter out @everyone role
+    .sort((a, b) => b.position - a.position) // Sort by position (highest first)
+    .map(role => ({
+      label: role.name.substring(0, 25), // Discord has 25 char limit on labels
+      value: role.id,
+      description: `Role with ${role.members.size} members`,
+    }))
+    .slice(0, 25); // Discord has 25 option limit
+  
+  // If no roles exist
+  if (availableRoles.length === 0) {
+    return await interaction.reply({
+      content: `❌ No roles found in this server (besides @everyone). Please create a role first.`,
+      ephemeral: true,
+    });
+  }
+  
+  // Create the prompt embed
+  const embed = new EmbedBuilder()
+    .setColor(COLORS.PRIMARY)
+    .setTitle('Role Selection')
+    .setDescription(prompt);
+  
+  // Create the role select menu
+  const selectRow = new ActionRowBuilder()
+    .addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId('setup_role_select')
+        .setPlaceholder('Select a role')
+        .addOptions(availableRoles)
+    );
+  
+  // Add cancel button
+  const buttonRow = new ActionRowBuilder()
+    .addComponents(
+      new ButtonBuilder()
+        .setCustomId('setup_cancel')
+        .setLabel('Cancel')
+        .setStyle(ButtonStyle.Secondary)
+        .setEmoji('✖️')
+    );
+  
+  const response = await interaction.reply({
+    embeds: [embed],
+    components: [selectRow, buttonRow],
+    ephemeral: true,
+  });
+  
+  // Create collector for the selection
+  const collector = response.createMessageComponentCollector({ 
+    time: 60000 // 1 minute
+  });
+  
+  collector.on('collect', async componentInteraction => {
+    // Handle role selection
+    if (componentInteraction.customId === 'setup_role_select') {
+      const roleId = componentInteraction.values[0];
+      const role = interaction.guild.roles.cache.get(roleId);
+      
+      try {
+        // Get current config
+        const configResult = await db.query(
+          'SELECT * FROM guild_config WHERE guild_id = $1',
+          [guildId]
+        );
+        
+        if (configResult.rows.length === 0) {
+          // Insert new config
+          await db.query(
+            `INSERT INTO guild_config (guild_id, support_role_id)
+             VALUES ($1, $2)`,
+            [guildId, roleId]
+          );
+        } else {
+          // Update existing config
+          await db.query(
+            `UPDATE guild_config
+             SET support_role_id = $1
+             WHERE guild_id = $2`,
+            [roleId, guildId]
+          );
+        }
+        
+        // Confirm the update
+        const successEmbed = new EmbedBuilder()
+          .setColor(COLORS.SUCCESS)
+          .setTitle('✅ Role Set')
+          .setDescription(`Successfully set support role to ${role}!`)
+          .setFooter({ text: 'You can continue with other configuration options.' });
+        
+        await componentInteraction.update({
+          embeds: [successEmbed],
+          components: [],
+        });
+        
+        // After a short delay, go back to the ticket setup menu
+        setTimeout(async () => {
+          const config = await getGuildConfig(guildId);
+          await handleTicketSetupMenu(componentInteraction, client, config);
+        }, 2000); // 2 second delay
+      } catch (error) {
+        logger.error('Error saving role setting:', error);
+        await componentInteraction.update({
+          content: '❌ An error occurred while saving your setting. Please try again.',
+          embeds: [],
+          components: [],
+        });
+      }
+    }
+    
+    // Handle cancel button
+    if (componentInteraction.customId === 'setup_cancel') {
+      const config = await getGuildConfig(guildId);
+      await handleTicketSetupMenu(componentInteraction, client, config);
+    }
+  });
+  
+  collector.on('end', async (collected) => {
+    if (collected.size === 0) {
+      // Timeout - update the message
+      const timeoutEmbed = new EmbedBuilder()
+        .setColor(COLORS.DANGER)
+        .setTitle('⏱️ Timed Out')
+        .setDescription('Role selection timed out. Please try again.');
+      
+      await interaction.editReply({
+        embeds: [timeoutEmbed],
+        components: [],
+      }).catch(err => logger.error('Error updating timed out role selection:', err));
+    }
+  });
+}
+
+/**
+ * Handle ticket panel creation with improved channel selection
+ */
+async function handleTicketPanelCreation(interaction, client, config) {
+  // First check if we have the required settings
+  if (!config.ticket_category_id || !config.support_role_id) {
+    return await interaction.reply({
+      content: '❌ You need to configure both a ticket category and a support role before creating a ticket panel.',
+      ephemeral: true,
+    });
+  }
+  
+  // Get available text channels for the panel
+  const availableChannels = interaction.guild.channels.cache
+    .filter(channel => channel.type === ChannelType.GuildText)
+    .map(channel => ({
+      label: channel.name.substring(0, 25), // Discord has 25 char limit on labels
+      value: channel.id,
+      description: `#${channel.name.substring(0, 45)}`,  // 50 char limit on description
+    }))
+    .slice(0, 25); // Discord has 25 option limit
+  
+  // If no text channels exist
+  if (availableChannels.length === 0) {
+    return await interaction.reply({
+      content: `❌ No text channels found in this server. Please create a text channel first.`,
+      ephemeral: true,
+    });
+  }
+  
+  // Create the prompt embed
+  const embed = new EmbedBuilder()
+    .setColor(COLORS.PRIMARY)
+    .setTitle('Create Ticket Panel')
+    .setDescription('Select the channel where you want to create the ticket panel:')
+    .setFooter({ text: 'The ticket panel will be created in the selected channel.' });
+  
+  // Create the channel select menu
+  const selectRow = new ActionRowBuilder()
+    .addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId('setup_panel_channel_select')
+        .setPlaceholder('Select a channel')
+        .addOptions(availableChannels)
+    );
+  
+  // Add cancel button
+  const buttonRow = new ActionRowBuilder()
+    .addComponents(
+      new ButtonBuilder()
+        .setCustomId('setup_cancel_panel')
+        .setLabel('Cancel')
+        .setStyle(ButtonStyle.Secondary)
+        .setEmoji('✖️')
+    );
+  
+  const response = await interaction.reply({
+    embeds: [embed],
+    components: [selectRow, buttonRow],
+    ephemeral: true,
+  });
+  
+  // Create collector for the selection
+  const collector = response.createMessageComponentCollector({ 
+    time: 60000 // 1 minute
+  });
+  
+  collector.on('collect', async componentInteraction => {
+    // Handle channel selection
+    if (componentInteraction.customId === 'setup_panel_channel_select') {
+      const channelId = componentInteraction.values[0];
+      const channel = interaction.guild.channels.cache.get(channelId);
+      
+      try {
+        // Create the ticket panel using the ticketpanel command logic
+        // Ice theme colors
+        const IGLOO_BLUE = 0x0CAFFF;  // Bright cyan/blue
+        
+        // Custom igloo banner image URL
+        const IGLOO_BANNER = ASSETS.BANNER;
+        
+        // Create branded embed with ice theme
+        const panelEmbed = new EmbedBuilder()
+          .setTitle('❄️ Igloo. Ticket Panel')
+          .setDescription(
+            'Need help? Have a question? Want to report an issue?' +
+            ' Click the button below to create a private support ticket.\n\n' +
+            '**What happens next:**\n' +
+            '• A private ticket channel will be created\n' +
+            '• Our support team will be notified\n' +
+            '• You\'ll receive assistance as soon as possible\n\n' +
+            '**Ticket Categories:**\n' +
+            '🛒 **Buy** - Click for making a purchase\n' +
+            '🧊 **General Support** - General questions and help\n' +
+            '📦 **Order Issues** - Problems with orders\n' +
+            '⚙️ **Technical Support** - Technical difficulties\n'
+          )
+          .setColor(IGLOO_BLUE)
+          .setThumbnail(interaction.guild.iconURL({ dynamic: true }))
+          .setImage(IGLOO_BANNER)
+          .setFooter({ 
+            text: 'Igloo E-Commerce Bot • Click below to create a ticket',
+            iconURL: client.user.displayAvatarURL()
+          });
+
+        // Create button with ice theme
+        const button = new ActionRowBuilder()
+          .addComponents(
+            new ButtonBuilder()
+              .setCustomId('create_ticket')
+              .setLabel('Create Ticket')
+              .setEmoji('🧊')
+              .setStyle(ButtonStyle.Primary)
+          );
+
+        // Send panel to specified channel
+        await channel.send({
+          embeds: [panelEmbed],
+          components: [button]
+        });
+        
+        // Create success embed
+        const successEmbed = new EmbedBuilder()
+          .setColor(COLORS.SUCCESS)
+          .setTitle('✅ Ticket Panel Created')
+          .setDescription(`Ticket panel successfully created in ${channel}!`)
+          .addFields({
+            name: '📋 Next Steps',
+            value: [
+              '• Users can now create tickets by clicking the button',
+              '• Tickets will be created in the configured category',
+              '• The support role will be notified of new tickets',
+              '• Ticket logs will be sent to the configured log channel (if set)'
+            ].join('\n')
+          })
+          .setFooter({ text: 'Igloo Bot • Use /setup panel to make further configuration changes' });
+        
+        // Add additional actions
+        const actionRow = new ActionRowBuilder()
+          .addComponents(
+            new ButtonBuilder()
+              .setCustomId('setup_back_main')
+              .setLabel('Back to Setup Panel')
+              .setStyle(ButtonStyle.Secondary)
+              .setEmoji('↩️'),
+            new ButtonBuilder()
+              .setCustomId('setup_check_config_after_panel')
+              .setLabel('Check Configuration')
+              .setStyle(ButtonStyle.Secondary)
+              .setEmoji('🔍')
+          );
+        
+        // Confirm the creation
+        await componentInteraction.update({
+          embeds: [successEmbed],
+          components: [actionRow],
+          ephemeral: true,
+        });
+      } catch (error) {
+        logger.error('Error creating ticket panel:', error);
+        await componentInteraction.update({
+          content: '❌ An error occurred while creating the ticket panel. Please try again.',
+          embeds: [],
+          components: [],
+        });
+      }
+    }
+    
+    // Handle cancel button
+    if (componentInteraction.customId === 'setup_cancel_panel') {
+      const config = await getGuildConfig(interaction.guild.id);
+      await handleTicketSetupMenu(componentInteraction, client, config);
+    }
+  });
+  
+  collector.on('end', async (collected) => {
+    if (collected.size === 0) {
+      // Timeout - update the message
+      const timeoutEmbed = new EmbedBuilder()
+        .setColor(COLORS.DANGER)
+        .setTitle('⏱️ Timed Out')
+        .setDescription('Panel creation timed out. Please try again.');
+      
+      await interaction.editReply({
+        embeds: [timeoutEmbed],
+        components: [],
+      }).catch(err => logger.error('Error updating timed out panel creation:', err));
     }
   });
 }
