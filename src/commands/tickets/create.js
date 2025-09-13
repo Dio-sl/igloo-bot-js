@@ -98,10 +98,13 @@ module.exports = {
       // Generate ticket ID
       const ticketNumber = await getNextTicketNumber(guild.id);
       const ticketId = `${config.ticket_prefix}-${ticketNumber.toString().padStart(4, '0')}`;
+      
+      // Create clean channel name without emoji prefix
+      const channelName = `ticket-${ticketNumber.toString().padStart(4, '0')}`.toLowerCase();
 
       // Create ticket channel
       const ticketChannel = await guild.channels.create({
-        name: `${categoryInfo.emoji}-${ticketId.toLowerCase()}`,
+        name: channelName, // Clean channel name without emoji
         type: ChannelType.GuildText,
         parent: config.ticket_category_id || null,
         topic: `Support ticket for ${interaction.user.tag} | Category: ${categoryInfo.label}`,
