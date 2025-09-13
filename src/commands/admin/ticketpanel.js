@@ -29,7 +29,7 @@ module.exports = {
     const IGLOO_DARK = 0x0A5C7A;  // Darker blue for elements
     
     // Custom igloo banner image URL - replace with an actual ice/igloo themed image
-    const IGLOO_BANNER = 'https://i.imgur.com/pHFs0GE.png'; // Ice-themed banner
+    const IGLOO_BANNER = 'https://cdn.discordapp.com/attachments/1409836469530660986/1416393618838786058/Branding_-_Imgur.png?ex=68c6aeda&is=68c55d5a&hm=0b4d6a43db275ca5cdebf44041f287d1123962269ddad361d684e6b54e5fbe2f&'; // Ice-themed banner
     
     // Create branded embed with ice theme
     const panelEmbed = new EmbedBuilder()
