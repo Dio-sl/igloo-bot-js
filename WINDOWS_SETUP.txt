@@ -1,0 +1,75 @@
+==================================================
+    IGLOO BOT (JAVASCRIPT) - WINDOWS SETUP
+==================================================
+
+NO MORE TYPESCRIPT ERRORS! This is pure JavaScript.
+
+==================================================
+    STEP 1: INSTALL SOFTWARE
+==================================================
+
+1. Node.js: https://nodejs.org/
+   - Download LTS version
+   - Install with default settings
+
+2. PostgreSQL: https://www.postgresql.org/download/windows/
+   - Download installer
+   - REMEMBER YOUR PASSWORD!
+   - Default username: postgres
+
+==================================================
+    STEP 2: SETUP DATABASE
+==================================================
+
+Using pgAdmin (easiest):
+1. Open pgAdmin
+2. Login with your password
+3. Right-click "Databases" → Create → Database
+4. Name: igloo_bot
+5. Save
+
+==================================================
+    STEP 3: CONFIGURE BOT
+==================================================
+
+1. Edit .env file:
+   DATABASE_URL=postgresql://postgres:YOUR_PASSWORD@localhost:5432/igloo_bot
+   DISCORD_TOKEN=your_bot_token
+   CLIENT_ID=your_client_id
+
+2. Get Discord credentials from:
+   https://discord.com/developers/applications
+
+==================================================
+    STEP 4: RUN THE BOT
+==================================================
+
+Open Command Prompt in bot folder:
+
+npm install
+npm start
+
+That's it! No compilation needed!
+
+==================================================
+    COMMANDS
+==================================================
+
+npm start     - Run the bot
+npm run dev   - Run with auto-restart
+
+==================================================
+    TROUBLESHOOTING
+==================================================
+
+"Cannot find module"
+→ Run: npm install
+
+"Password authentication failed"
+→ Check your password in .env file
+
+"Bot not responding"
+→ Check Discord token in .env file
+→ Enable intents in Discord Developer Portal
+
+==================================================

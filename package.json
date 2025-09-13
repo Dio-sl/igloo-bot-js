@@ -1,0 +1,42 @@
+{
+  "name": "igloo-discord-bot",
+  "version": "0.1.0",
+  "description": "Complete E-Commerce Automation for Discord Communities",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js",
+    "test": "node scripts/test-database.js",
+    "lint": "eslint .",
+    "format": "prettier -w .",
+    "register:commands": "node scripts/register-commands.js"
+  },
+  "keywords": [
+    "discord",
+    "bot",
+    "ecommerce",
+    "automation",
+    "tickets"
+  ],
+  "author": "Igloo Development Team",
+  "license": "MIT",
+  "dependencies": {
+    "discord.js": "^14.14.1",
+    "dotenv": "^16.4.1",
+    "pg": "^8.11.3",
+    "winston": "^3.11.0",
+    "envalid": "^8.0.0",
+    "pino": "^9.3.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2",
+    "eslint": "^9.9.1",
+    "prettier": "^3.3.3",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-import": "^2.29.1",
+    "pino-pretty": "^11.2.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
