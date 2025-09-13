@@ -21,7 +21,7 @@ module.exports = {
   },
   
   images: {
-    banner: 'https://imgur.com/Ybt3ejf', // Upload to imgur or discord
+    banner: 'https://i.imgur.com/Ybt3ejf.png', // Upload to imgur or discord
     logo: 'https://imgur.com/w4Si6XW',
     footer: 'https://imgur.com/w4Si6XW',
   },
