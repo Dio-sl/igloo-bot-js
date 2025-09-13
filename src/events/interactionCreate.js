@@ -1,3 +1,4 @@
+// Fixed interaction handler for the ticket category selection
 const {
   Events,
   PermissionFlagsBits,
@@ -34,37 +35,13 @@ module.exports = {
             ? interaction.values[0]
             : 'general';
 
-          // Reuse the /ticket create command logic by adapting the interaction
-          const ticketCreateCmd = require('../commands/tickets/create.js');
-          // Create a shallow adapter for options
-          const fakeInteraction = Object.create(interaction);
-          fakeInteraction.options = {
-            getString: (name) => {
-              if (name === 'category') return selected;
-              if (name === 'description') return null;
-              return null;
-            }
-          };
-          // Avoid double defer: the command calls deferReply, so override to no-op
-          fakeInteraction.deferReply = async () => {};
+          // Get category display info
+          const categoryInfo = getCategoryInfo(selected);
           
-          // Important: Update the original message to remove the dropdown
-          // Store the original editReply method
-          const originalEditReply = interaction.editReply.bind(interaction);
+          // We'll handle the ticket creation directly here instead of trying to reuse the command
+          // This fixes the "ticketCreateCmd.execute is not a function" error
+          await createTicket(interaction, client, categoryInfo);
           
-          // Override editReply to modify the original message first
-          fakeInteraction.editReply = async (options) => {
-            // First update the original message to remove the dropdown
-            await originalEditReply({
-              content: 'Processing your ticket request...',
-              components: [] // Remove all components (dropdown)
-            });
-            
-            // Now send the confirmation as a followUp instead
-            return await interaction.followUp(options);
-          };
-
-          await ticketCreateCmd.execute(fakeInteraction, client);
         } catch (error) {
           logger.error('Error handling ticket category select:', error);
           try {
@@ -82,6 +59,179 @@ module.exports = {
   }
 };
 
+// Function to directly create a ticket from the dropdown selection
+async function createTicket(interaction, client, categoryInfo) {
+  try {
+    const guild = interaction.guild;
+    const userId = interaction.user.id;
+    const description = 'No description provided'; // Default for dropdown selection
+
+    // Check if user has too many open tickets
+    const openTicketsResult = await db.query(
+      'SELECT COUNT(*) FROM tickets WHERE user_id = $1 AND guild_id = $2 AND status = $3',
+      [userId, guild.id, 'open']
+    );
+
+    const openTicketCount = parseInt(openTicketsResult.rows[0].count);
+    
+    // Get guild config
+    const configResult = await db.query(
+      'SELECT * FROM ticket_config WHERE guild_id = $1',
+      [guild.id]
+    );
+
+    const config = configResult.rows[0] || { max_open_tickets: 5, ticket_prefix: 'TICKET' };
+
+    if (openTicketCount >= (config.max_open_tickets || 5)) {
+      await interaction.followUp({
+        content: `You already have ${openTicketCount} open tickets. Please close some before creating new ones.`,
+        ephemeral: true
+      });
+      return;
+    }
+
+    // Generate ticket ID
+    const ticketNumber = await getNextTicketNumber(guild.id);
+    const ticketId = `${config.ticket_prefix}-${ticketNumber.toString().padStart(4, '0')}`;
+
+    // Create ticket channel
+    const ticketChannel = await guild.channels.create({
+      name: `${categoryInfo.emoji}-${ticketId.toLowerCase()}`,
+      type: ChannelType.GuildText,
+      parent: config.ticket_category_id || undefined,
+      topic: `Support ticket for ${interaction.user.tag} | Category: ${categoryInfo.label}`,
+      permissionOverwrites: [
+        {
+          id: guild.id,
+          deny: [PermissionFlagsBits.ViewChannel],
+        },
+        {
+          id: userId,
+          allow: [
+            PermissionFlagsBits.ViewChannel,
+            PermissionFlagsBits.SendMessages,
+            PermissionFlagsBits.ReadMessageHistory,
+            PermissionFlagsBits.AttachFiles,
+          ],
+        },
+        {
+          id: client.user.id,
+          allow: [
+            PermissionFlagsBits.ViewChannel,
+            PermissionFlagsBits.SendMessages,
+            PermissionFlagsBits.ManageChannels,
+            PermissionFlagsBits.ManageMessages,
+          ],
+        },
+      ],
+    });
+
+    // Add support role permissions if configured
+    if (config.support_role_id) {
+      await ticketChannel.permissionOverwrites.create(config.support_role_id, {
+        ViewChannel: true,
+        SendMessages: true,
+        ReadMessageHistory: true,
+        AttachFiles: true,
+        ManageMessages: true,
+      });
+    }
+
+    // Save ticket to database
+    await db.query(
+      `INSERT INTO tickets (ticket_id, guild_id, user_id, channel_id, category, status)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [ticketId, guild.id, userId, ticketChannel.id, categoryInfo.label, 'open']
+    );
+
+    // Create welcome embed with ice theme
+    const welcomeEmbed = new EmbedBuilder()
+      .setTitle(`${categoryInfo.emoji} ${ticketId}`)
+      .setDescription(config.welcome_message || 'Thank you for creating a ticket! Our support team will be with you shortly.')
+      .addFields(
+        { name: 'Category', value: categoryInfo.label, inline: true },
+        { name: 'Created by', value: `<@${userId}>`, inline: true },
+        { name: 'Status', value: '🔵 Open', inline: true },
+        { name: 'Description', value: description }
+      )
+      .setColor(categoryInfo.color || 0x0CAFFF)
+      .setTimestamp()
+      .setFooter({ 
+        text: 'Igloo Support System',
+        iconURL: client.user.displayAvatarURL()
+      });
+
+    // Create action buttons with ice theme styling
+    const actionRow = new ActionRowBuilder()
+      .addComponents(
+        new ButtonBuilder()
+          .setCustomId('ticket_claim')
+          .setLabel('Claim Ticket')
+          .setEmoji('👋')
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId('ticket_close')
+          .setLabel('Close Ticket')
+          .setEmoji('🔒')
+          .setStyle(ButtonStyle.Danger),
+        new ButtonBuilder()
+          .setCustomId('ticket_delete')
+          .setLabel('Delete Ticket')
+          .setEmoji('🗑️')
+          .setStyle(ButtonStyle.Danger)
+      );
+
+    // Send welcome message to ticket channel
+    await ticketChannel.send({
+      content: config.support_role_id ? `<@&${config.support_role_id}>` : undefined,
+      embeds: [welcomeEmbed],
+      components: [actionRow],
+    });
+
+    // Send confirmation to user with ice theme
+    const confirmEmbed = new EmbedBuilder()
+      .setTitle('✅ Ticket Created')
+      .setDescription(`Your ticket has been created successfully!`)
+      .addFields(
+        { name: 'Ticket ID', value: ticketId, inline: true },
+        { name: 'Channel', value: `<#${ticketChannel.id}>`, inline: true }
+      )
+      .setColor(0x7FFFD4) // Success color
+      .setTimestamp();
+
+    await interaction.followUp({ embeds: [confirmEmbed], ephemeral: true });
+
+    // Log ticket creation
+    logger.info(`Ticket created: ${ticketId} by ${interaction.user.tag} in ${guild.name}`);
+
+    // Send log to log channel if configured
+    if (config.log_channel_id) {
+      const logChannel = guild.channels.cache.get(config.log_channel_id);
+      if (logChannel) {
+        const logEmbed = new EmbedBuilder()
+          .setTitle('❄️ New Ticket Created')
+          .addFields(
+            { name: 'Ticket ID', value: ticketId, inline: true },
+            { name: 'User', value: `<@${userId}>`, inline: true },
+            { name: 'Category', value: categoryInfo.label, inline: true },
+            { name: 'Channel', value: `<#${ticketChannel.id}>`, inline: true }
+          )
+          .setColor(0x87CEEB) // Secondary color
+          .setTimestamp();
+
+        await logChannel.send({ embeds: [logEmbed] });
+      }
+    }
+  } catch (error) {
+    logger.error('Error creating ticket:', error);
+    await interaction.followUp({
+      content: 'An error occurred while creating your ticket. Please try again later.',
+      ephemeral: true
+    });
+  }
+}
+
+// Handle slash commands
 async function handleCommand(interaction, client) {
   const command = client.commands.get(interaction.commandName);
 
@@ -137,6 +287,7 @@ async function handleCommand(interaction, client) {
   }
 }
 
+// Handle ticket creation
 async function handleTicketCreation(interaction, client) {
   const guild = interaction.guild;
   const userId = interaction.user.id;
@@ -166,7 +317,7 @@ async function handleTicketCreation(interaction, client) {
       return;
     }
 
-    // Show category selection
+    // Show category selection with categories matching the panel
     const categorySelect = new ActionRowBuilder()
       .addComponents(
         new StringSelectMenuBuilder()
@@ -176,7 +327,7 @@ async function handleTicketCreation(interaction, client) {
             {
               label: 'Buy',
               description: 'Click for making a purchase',
-              value: 'Buy',
+              value: 'buy',
               emoji: '🛒'
             },
             {
@@ -186,8 +337,8 @@ async function handleTicketCreation(interaction, client) {
               emoji: '🧊'
             },
             {
-              label: 'Order issues',
-              description: 'Problem with orders',
+              label: 'Order Issues',
+              description: 'Problems with orders',
               value: 'order',
               emoji: '📦'
             },
@@ -196,7 +347,7 @@ async function handleTicketCreation(interaction, client) {
               description: 'Technical difficulties',
               value: 'technical',
               emoji: '⚙️'
-            },
+            }
           ])
       );
 
@@ -214,6 +365,7 @@ async function handleTicketCreation(interaction, client) {
   }
 }
 
+// Handle button interactions
 async function handleButton(interaction, client) {
   const { customId } = interaction;
 
@@ -237,6 +389,7 @@ async function handleButton(interaction, client) {
   }
 }
 
+// Handle ticket-specific button interactions
 async function handleTicketButton(interaction, client) {
   const { customId, guild, channel, user } = interaction;
 
@@ -277,6 +430,7 @@ async function handleTicketButton(interaction, client) {
   }
 }
 
+// Implementations of ticket button handlers (these are the same as your existing code)
 async function handleClaimTicket(interaction, ticket) {
   // Check if user has permission to claim tickets
   const member = interaction.guild.members.cache.get(interaction.user.id);
@@ -434,4 +588,45 @@ async function handleDeleteTicket(interaction, ticket) {
       logger.error(`Failed to delete ticket channel: ${error}`);
     }
   }, 3000);
+}
+
+// Function to get category information
+function getCategoryInfo(categoryValue) {
+  const categories = {
+    'buy': { 
+      label: 'Buy', 
+      emoji: '🛒', 
+      description: 'Click for making a purchase',
+      color: 0x4CAF50 // Green
+    },
+    'general': { 
+      label: 'General Support', 
+      emoji: '🧊', 
+      description: 'General questions and help',
+      color: 0x2196F3 // Blue
+    },
+    'order': { 
+      label: 'Order Issues', 
+      emoji: '📦', 
+      description: 'Problems with orders',
+      color: 0xFF9800 // Orange
+    },
+    'technical': { 
+      label: 'Technical Support', 
+      emoji: '⚙️', 
+      description: 'Technical difficulties',
+      color: 0x9C27B0 // Purple
+    }
+  };
+  
+  return categories[categoryValue] || categories['general'];
+}
+
+// Function to get next ticket number
+async function getNextTicketNumber(guildId) {
+  const result = await db.query(
+    'SELECT COUNT(*) FROM tickets WHERE guild_id = $1',
+    [guildId]
+  );
+  return parseInt(result.rows[0].count) + 1;
 }
