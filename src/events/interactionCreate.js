@@ -174,22 +174,22 @@ async function handleTicketCreation(interaction, client) {
           .setPlaceholder('Select ticket category')
           .addOptions([
             {
+              label: 'Buy',
+              description: 'Click for making a purchase',
+              value: 'Buy',
+              emoji: '🛒'
+            },
+            {
               label: 'General Support',
               description: 'General questions and help',
               value: 'general',
-              emoji: '🛍️'
+              emoji: '🧊'
             },
             {
-              label: 'Order Issue',
-              description: 'Problems with orders',
+              label: 'Order issues',
+              description: 'Problem with orders',
               value: 'order',
               emoji: '📦'
-            },
-            {
-              label: 'Payment Problem',
-              description: 'Billing and payment issues',
-              value: 'payment',
-              emoji: '💳'
             },
             {
               label: 'Technical Support',
@@ -197,12 +197,6 @@ async function handleTicketCreation(interaction, client) {
               value: 'technical',
               emoji: '⚙️'
             },
-            {
-              label: 'Other',
-              description: 'Everything else',
-              value: 'other',
-              emoji: '❓'
-            }
           ])
       );
 
