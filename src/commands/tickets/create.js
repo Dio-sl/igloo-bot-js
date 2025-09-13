@@ -10,6 +10,15 @@ const {
 const { db } = require('../../database/Database');
 const { logger } = require('../../utils/logger');
 
+// Ice theme colors
+const IGLOO_COLORS = {
+  PRIMARY: 0x0CAFFF,    // Bright cyan blue - primary color
+  SECONDARY: 0x87CEEB,  // Sky blue - secondary color
+  SUCCESS: 0x7FFFD4,    // Aquamarine - success indicators
+  DANGER: 0xE91E63,     // Pink-ish - danger/warning color
+  DARK: 0x0A5C7A,       // Dark blue - background/text color
+};
+
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('ticket')
@@ -81,7 +90,7 @@ module.exports = {
 
       // Create ticket channel
       const ticketChannel = await guild.channels.create({
-        name: `🎫-${ticketId.toLowerCase()}`,
+        name: `❄️-${ticketId.toLowerCase()}`,
         type: ChannelType.GuildText,
         parent: config.ticket_category_id || undefined,
         topic: `Support ticket for ${interaction.user.tag} | Category: ${ticketCategory}`,
@@ -129,21 +138,24 @@ module.exports = {
         [ticketId, guild.id, userId, ticketChannel.id, ticketCategory, 'open']
       );
 
-      // Create welcome embed
+      // Create welcome embed with ice theme
       const welcomeEmbed = new EmbedBuilder()
-        .setTitle(`🎫 ${ticketId}`)
+        .setTitle(`🧊 ${ticketId}`)
         .setDescription(config.welcome_message || 'Thank you for creating a ticket! Our support team will be with you shortly.')
         .addFields(
           { name: 'Category', value: ticketCategory, inline: true },
           { name: 'Created by', value: `<@${userId}>`, inline: true },
-          { name: 'Status', value: '🟢 Open', inline: true },
+          { name: 'Status', value: '🔵 Open', inline: true },
           { name: 'Description', value: description }
         )
-        .setColor(0x5865F2)
+        .setColor(IGLOO_COLORS.PRIMARY)
         .setTimestamp()
-        .setFooter({ text: 'Igloo Support System' });
+        .setFooter({ 
+          text: 'Igloo Support System',
+          iconURL: client.user.displayAvatarURL()
+        });
 
-      // Create action buttons
+      // Create action buttons with ice theme styling
       const actionRow = new ActionRowBuilder()
         .addComponents(
           new ButtonBuilder()
@@ -170,7 +182,7 @@ module.exports = {
         components: [actionRow],
       });
 
-      // Send confirmation to user
+      // Send confirmation to user with ice theme
       const confirmEmbed = new EmbedBuilder()
         .setTitle('✅ Ticket Created')
         .setDescription(`Your ticket has been created successfully!`)
@@ -178,7 +190,7 @@ module.exports = {
           { name: 'Ticket ID', value: ticketId, inline: true },
           { name: 'Channel', value: `<#${ticketChannel.id}>`, inline: true }
         )
-        .setColor(0x00FF00)
+        .setColor(IGLOO_COLORS.SUCCESS)
         .setTimestamp();
 
       await interaction.editReply({ embeds: [confirmEmbed] });
@@ -191,14 +203,14 @@ module.exports = {
         const logChannel = guild.channels.cache.get(config.log_channel_id);
         if (logChannel) {
           const logEmbed = new EmbedBuilder()
-            .setTitle('📋 New Ticket Created')
+            .setTitle('❄️ New Ticket Created')
             .addFields(
               { name: 'Ticket ID', value: ticketId, inline: true },
               { name: 'User', value: `<@${userId}>`, inline: true },
               { name: 'Category', value: ticketCategory, inline: true },
               { name: 'Channel', value: `<#${ticketChannel.id}>`, inline: true }
             )
-            .setColor(0x0099FF)
+            .setColor(IGLOO_COLORS.SECONDARY)
             .setTimestamp();
 
           await logChannel.send({ embeds: [logEmbed] });
