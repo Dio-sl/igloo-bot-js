@@ -259,7 +259,7 @@ function getCategoryInfo(categoryValue) {
     },
     'general': { 
       label: 'General Support', 
-      emoji: '📞', 
+      emoji: '🧊', 
       description: 'General questions and help'
     },
     'order': { 
