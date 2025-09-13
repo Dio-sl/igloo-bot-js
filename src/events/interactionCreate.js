@@ -21,13 +21,15 @@ module.exports = {
 
     // Handle button interactions
     if (interaction.isButton()) {
+      await handleButton(interaction, client);
+    }
 
     // Handle select menu interactions (category selection for tickets)
-    if (interaction.isStringSelectMenu && interaction.isStringSelectMenu()) {
+    if (interaction.isStringSelectMenu()) {
       if (interaction.customId === 'ticket_category_select') {
         try {
-          // Defer to keep the interaction alive (ephemeral)
-          await interaction.deferReply({ ephemeral: true });
+          // Defer to keep the interaction alive
+          await interaction.deferUpdate();
           const selected = Array.isArray(interaction.values) && interaction.values.length
             ? interaction.values[0]
             : 'general';
@@ -45,23 +47,37 @@ module.exports = {
           };
           // Avoid double defer: the command calls deferReply, so override to no-op
           fakeInteraction.deferReply = async () => {};
-          // Ensure editReply is available
-          fakeInteraction.editReply = interaction.editReply.bind(interaction);
+          
+          // Important: Update the original message to remove the dropdown
+          // Store the original editReply method
+          const originalEditReply = interaction.editReply.bind(interaction);
+          
+          // Override editReply to modify the original message first
+          fakeInteraction.editReply = async (options) => {
+            // First update the original message to remove the dropdown
+            await originalEditReply({
+              content: 'Processing your ticket request...',
+              components: [] // Remove all components (dropdown)
+            });
+            
+            // Now send the confirmation as a followUp instead
+            return await interaction.followUp(options);
+          };
 
           await ticketCreateCmd.execute(fakeInteraction, client);
         } catch (error) {
-          const { logger } = require('../utils/logger');
           logger.error('Error handling ticket category select:', error);
-          if (!interaction.replied) {
-            await interaction.reply({ content: 'Failed to create the ticket. Try /ticket manually.', ephemeral: true });
-          } else {
-            await interaction.followUp({ content: 'Failed to create the ticket. Try /ticket manually.', ephemeral: true });
+          try {
+            if (!interaction.replied && !interaction.deferred) {
+              await interaction.reply({ content: 'Failed to create the ticket. Try /ticket manually.', ephemeral: true });
+            } else {
+              await interaction.followUp({ content: 'Failed to create the ticket. Try /ticket manually.', ephemeral: true });
+            }
+          } catch (replyError) {
+            logger.error('Error sending failure message:', replyError);
           }
         }
-        return;
       }
-    }
-      await handleButton(interaction, client);
     }
   }
 };
