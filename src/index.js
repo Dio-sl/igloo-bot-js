@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, Collection } = require('discord.js');
+const { Client, GatewayIntentBits, Collection, Events } = require('discord.js');
 const { logger } = require('./utils/logger');
 const { validateEnv } = require('./utils/validateEnv');
 const { Database } = require('./database/Database');
