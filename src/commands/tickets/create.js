@@ -143,6 +143,9 @@ module.exports = {
         [ticketId, guild.id, userId, ticketChannel.id, ticketCategory, 'open']
       );
 
+      // Get category-specific welcome message
+      const welcomeMessage = getCategoryWelcomeMessage(ticketCategory);
+      
       // Create FINAL clean welcome embed - using same blue color and no extra space
       // Fixed title layout and ensuring correct category is displayed
       const timestamp = Math.floor(Date.now() / 1000);
@@ -152,10 +155,7 @@ module.exports = {
           name: ticketId, // Just the ticket ID without "Ticket:" prefix
           iconURL: client.user.displayAvatarURL() 
         })
-        .setDescription(
-          `Thank you for creating a ticket! Our support team will be with you shortly.
-Please provide any additional details that might help us assist you better.`
-        )
+        .setDescription(welcomeMessage)
         .addFields([
           {
             name: 'Ticket Information',
@@ -275,6 +275,46 @@ function getCategoryInfo(categoryValue) {
   };
   
   return categories[categoryValue] || categories['general'];
+}
+
+// Function to get category-specific welcome messages
+function getCategoryWelcomeMessage(categoryValue) {
+  const messages = {
+    'buy': `Thank you for your interest in our products! 
+    
+Our sales team will be with you shortly to assist with your purchase. 
+
+In the meantime, please provide the following details if applicable:
+• Which product(s) you're interested in
+• Quantity needed
+• Any specific requirements or questions about the product`,
+
+    'general': `Thank you for reaching out to our support team!
+
+We'll be with you shortly to assist with your inquiry.
+
+Please provide any additional details that might help us assist you better.`,
+
+    'order': `Thank you for contacting us about your order.
+
+Our order support team will be with you shortly to help resolve any issues.
+
+To help us assist you faster, please provide:
+• Your order number (if available)
+• Date of purchase
+• Description of the issue you're experiencing`,
+
+    'technical': `Thank you for contacting technical support!
+
+Our tech team will be with you shortly to help troubleshoot your issue.
+
+To help us assist you faster, please provide:
+• Detailed description of the technical issue
+• Any error messages you're seeing
+• Steps you've already taken to resolve the issue`
+  };
+
+  return messages[categoryValue] || messages['general'];
 }
 
 async function getNextTicketNumber(guildId) {
