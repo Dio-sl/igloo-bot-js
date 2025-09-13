@@ -12,19 +12,11 @@ const { logger } = require('../../utils/logger');
 
 // Ice theme colors
 const IGLOO_COLORS = {
-  PRIMARY: 0x0CAFFF,    // Bright cyan blue - primary color
+  PRIMARY: 0x0CAFFF,    // Bright cyan blue - primary color for all tickets
   SECONDARY: 0x87CEEB,  // Sky blue - secondary color
   SUCCESS: 0x7FFFD4,    // Aquamarine - success indicators
   DANGER: 0xE91E63,     // Pink-ish - danger/warning color
   DARK: 0x0A5C7A,       // Dark blue - background/text color
-};
-
-// Category-specific colors
-const CATEGORY_COLORS = {
-  'Buy': 0x4CAF50,           // Green
-  'General Support': 0x2196F3, // Blue
-  'Order Issues': 0xFF9800,    // Orange
-  'Technical Support': 0x9C27B0 // Purple
 };
 
 module.exports = {
@@ -38,7 +30,7 @@ module.exports = {
         .setRequired(false)
         .addChoices(
           { name: '🛒 Buy', value: 'buy' },
-          { name: '🧊 General Support', value: 'general' },
+          { name: '📞 General Support', value: 'general' },
           { name: '📦 Order Issues', value: 'order' },
           { name: '⚙️ Technical Support', value: 'technical' }
         )
@@ -70,7 +62,6 @@ module.exports = {
 
       // Get category display info
       const categoryInfo = getCategoryInfo(ticketCategory);
-      const categoryColor = CATEGORY_COLORS[categoryInfo.label] || IGLOO_COLORS.PRIMARY;
 
       // Check if user has too many open tickets
       const openTicketsResult = await db.query(
@@ -152,34 +143,34 @@ module.exports = {
         [ticketId, guild.id, userId, ticketChannel.id, categoryInfo.label, 'open']
       );
 
-      // Create IMPROVED welcome embed
+      // Create FINAL clean welcome embed - using same blue color and no extra space
       const timestamp = Math.floor(Date.now() / 1000);
       const welcomeEmbed = new EmbedBuilder()
+        .setColor(IGLOO_COLORS.PRIMARY) // Same blue color for all categories
         .setAuthor({ 
-          name: ticketId, 
+          name: `Ticket: ${ticketId}`, 
           iconURL: client.user.displayAvatarURL() 
         })
-        .setTitle(`${categoryInfo.emoji} ${categoryInfo.label} Support`)
         .setDescription(
-          config.welcome_message || 
-          `Thank you for creating a ticket! Our support team will be with you shortly.\n\n` +
-          `Please provide any additional details that might help us assist you better.`
+          `Thank you for creating a ticket! Our support team will be with you shortly.
+Please provide any additional details that might help us assist you better.`
         )
-        .setColor(categoryColor)
         .addFields([
           {
             name: 'Ticket Information',
             value: 
-              `**Category:** ${categoryInfo.label}\n` +
+              `**Category:** ${categoryInfo.emoji} ${categoryInfo.label}\n` +
               `**Created by:** <@${userId}>\n` +
               `**Status:** 🔵 Open\n` +
               `**Created:** <t:${timestamp}:R>`
-          },
-          {
-            name: 'Description',
-            value: description
           }
         ])
+        // Only add description field if it's not the default
+        .addFields(
+          description !== 'No description provided' 
+            ? [{ name: 'Description', value: description }]
+            : []
+        )
         .setFooter({ 
           text: 'Igloo Support System',
           iconURL: client.user.displayAvatarURL() 
@@ -267,7 +258,7 @@ function getCategoryInfo(categoryValue) {
     },
     'general': { 
       label: 'General Support', 
-      emoji: '🧊', 
+      emoji: '📞', 
       description: 'General questions and help'
     },
     'order': { 
