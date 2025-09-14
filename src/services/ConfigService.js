@@ -1,5 +1,14 @@
 // src/services/ConfigService.js
+const { logger } = require('../utils/logger');
+
+/**
+ * Service for managing guild configurations
+ */
 class ConfigService {
+  /**
+   * Create a new ConfigService
+   * @param {Object} db - Database connection
+   */
   constructor(db) {
     this.db = db;
     this.cache = new Map();
@@ -28,6 +37,11 @@ class ConfigService {
     };
   }
   
+  /**
+   * Get a guild's configuration
+   * @param {string} guildId - Guild ID
+   * @returns {Promise<Object>} Guild configuration
+   */
   async getGuildConfig(guildId) {
     // Check cache first
     if (this.cache.has(guildId)) {
@@ -54,7 +68,7 @@ class ConfigService {
       }
       
       // Parse stored config
-      const config = JSON.parse(result.rows[0].config);
+      const config = result.rows[0].config;
       
       // Add any missing keys from schema
       const fullConfig = this.applyDefaults(config);
@@ -69,6 +83,10 @@ class ConfigService {
     }
   }
   
+  /**
+   * Get default configuration
+   * @returns {Object} Default configuration
+   */
   getDefaultConfig() {
     // Generate default config from schema
     const defaultConfig = {};
@@ -88,6 +106,11 @@ class ConfigService {
     return defaultConfig;
   }
   
+  /**
+   * Apply default values to any missing settings
+   * @param {Object} config - Guild configuration
+   * @returns {Object} Configuration with defaults applied
+   */
   applyDefaults(config) {
     // Apply default values to any missing settings
     const result = { ...config };
@@ -107,6 +130,14 @@ class ConfigService {
     return result;
   }
   
+  /**
+   * Update a guild configuration setting
+   * @param {string} guildId - Guild ID
+   * @param {string} section - Configuration section
+   * @param {string} key - Setting key
+   * @param {any} value - Setting value
+   * @returns {Promise<boolean>} Success status
+   */
   async updateGuildConfig(guildId, section, key, value) {
     try {
       // Validate input
@@ -143,6 +174,12 @@ class ConfigService {
     }
   }
   
+  /**
+   * Update multiple guild configuration settings
+   * @param {string} guildId - Guild ID
+   * @param {Object} updates - Configuration updates
+   * @returns {Promise<boolean>} Success status
+   */
   async bulkUpdateConfig(guildId, updates) {
     try {
       // Get current config
@@ -180,6 +217,13 @@ class ConfigService {
     }
   }
   
+  /**
+   * Validate a configuration value against schema
+   * @param {string} section - Configuration section
+   * @param {string} key - Setting key
+   * @param {any} value - Setting value
+   * @throws {Error} Validation error
+   */
   validateValue(section, key, value) {
     const definition = this.schema[section][key];
     
@@ -213,6 +257,11 @@ class ConfigService {
     }
   }
   
+  /**
+   * Export guild configuration
+   * @param {string} guildId - Guild ID
+   * @returns {Promise<Object>} Exported configuration
+   */
   async exportConfig(guildId) {
     const config = await this.getGuildConfig(guildId);
     return {
@@ -223,6 +272,12 @@ class ConfigService {
     };
   }
   
+  /**
+   * Import guild configuration
+   * @param {string} guildId - Guild ID
+   * @param {Object} importData - Import data
+   * @returns {Promise<boolean>} Success status
+   */
   async importConfig(guildId, importData) {
     // Validate import data
     if (!importData.version || !importData.config) {
@@ -271,6 +326,11 @@ class ConfigService {
     return true;
   }
   
+  /**
+   * Reset guild configuration to defaults
+   * @param {string} guildId - Guild ID
+   * @returns {Promise<boolean>} Success status
+   */
   async resetGuildConfig(guildId) {
     const defaultConfig = this.getDefaultConfig();
     
@@ -286,3 +346,6 @@ class ConfigService {
     return true;
   }
 }
+
+// Export the class properly
+module.exports = ConfigService;
