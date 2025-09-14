@@ -1,23 +1,10 @@
-const {
-  SlashCommandBuilder,
-  EmbedBuilder,
-  ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle,
-  StringSelectMenuBuilder,
-  PermissionFlagsBits,
-  ChannelType,
-} = require('discord.js');
-
-const { db } = require('../../database/Database');
-const { logger } = require('../../utils/logger');
-const branding = require('../../config/branding');
-
-// Import setup modules
+// src/commands/admin/setup.js
+const { SlashCommandBuilder } = require('discord.js');
+const SetupWizard = require('./wizard');
 const TicketSetup = require('./setup/ticketSetup');
 const ShopSetup = require('./setup/ShopSetup');
 const GeneralSetup = require('./setup/GeneralSetup');
-const SetupUI = require('./setup/setupUI');
+const ConfigService = require('../../services/ConfigService');
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -26,89 +13,96 @@ module.exports = {
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     .addSubcommand(subcommand =>
       subcommand
-        .setName('panel')
-        .setDescription('Open the setup panel with all configuration options')
+        .setName('wizard')
+        .setDescription('Start the interactive setup wizard')
     )
     .addSubcommand(subcommand =>
       subcommand
         .setName('tickets')
         .setDescription('Configure the ticket system')
-        .addChannelOption(option =>
-          option
-            .setName('category')
-            .setDescription('Category to create tickets in')
-            .addChannelTypes(ChannelType.GuildCategory)
-            .setRequired(false)
-        )
-        .addRoleOption(option =>
-          option
-            .setName('support_role')
-            .setDescription('Role that can see and manage tickets')
-            .setRequired(false)
-        )
-        .addChannelOption(option =>
-          option
-            .setName('log_channel')
-            .setDescription('Channel for ticket logs')
-            .addChannelTypes(ChannelType.GuildText)
-            .setRequired(false)
-        )
     )
     .addSubcommand(subcommand =>
       subcommand
         .setName('shop')
         .setDescription('Configure the shop system')
-        .addChannelOption(option =>
+    )
+    .addSubcommand(subcommand =>
+      subcommand
+        .setName('general')
+        .setDescription('Configure general bot settings')
+    )
+    .addSubcommand(subcommand =>
+      subcommand
+        .setName('export')
+        .setDescription('Export your current configuration')
+    )
+    .addSubcommand(subcommand =>
+      subcommand
+        .setName('import')
+        .setDescription('Import a configuration')
+        .addAttachmentOption(option =>
           option
-            .setName('shop_channel')
-            .setDescription('Channel to display shop items')
-            .addChannelTypes(ChannelType.GuildText)
-            .setRequired(false)
+            .setName('config_file')
+            .setDescription('JSON configuration file')
+            .setRequired(true)
         )
-        .addRoleOption(option =>
-          option
-            .setName('customer_role')
-            .setDescription('Role given to customers after purchase')
-            .setRequired(false)
-        )
+    )
+    .addSubcommand(subcommand =>
+      subcommand
+        .setName('view')
+        .setDescription('View current configuration')
     ),
-
-  category: 'admin',
-  cooldown: 5,
 
   async execute(interaction, client) {
     // Check permissions
     if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
       return await interaction.reply({
         content: '❌ You need Administrator permission to use this command.',
-        flags: 64, // ephemeral flag
+        ephemeral: true,
       });
     }
 
+    const configService = new ConfigService(db);
     const subcommand = interaction.options.getSubcommand();
     
     try {
       switch (subcommand) {
-        case 'panel':
-          await this.handleSetupPanel(interaction, client);
+        case 'wizard':
+          const wizard = new SetupWizard(client, configService);
+          await wizard.start(interaction);
           break;
         case 'tickets':
-          await TicketSetup.handleDirectSetup(interaction, client);
+          const ticketSetup = new TicketSetup(client, configService);
+          await ticketSetup.show(interaction);
           break;
         case 'shop':
-          await ShopSetup.handleDirectSetup(interaction, client);
+          const shopSetup = new ShopSetup(client, configService);
+          await shopSetup.show(interaction);
+          break;
+        case 'general':
+          const generalSetup = new GeneralSetup(client, configService);
+          await generalSetup.show(interaction);
+          break;
+        case 'export':
+          await this.handleExport(interaction, configService);
+          break;
+        case 'import':
+          await this.handleImport(interaction, configService);
+          break;
+        case 'view':
+          await this.handleView(interaction, client, configService);
           break;
         default:
           await interaction.reply({
-            content: '❌ Unknown subcommand. Please use `/setup panel`.',
-            flags: 64, // ephemeral flag
+            content: '❌ Unknown subcommand.',
+            ephemeral: true,
           });
       }
     } catch (error) {
       logger.error('Error in setup command:', error);
       const errorMessage = { 
         content: '❌ An error occurred. Please try again later.',
-        flags: 64 // ephemeral flag
+        ephemeral: true
       };
       
       if (interaction.replied || interaction.deferred) {
@@ -119,202 +113,70 @@ module.exports = {
     }
   },
 
-  async handleSetupPanel(interaction, client) {
-    const guildId = interaction.guild.id;
+  async handleExport(interaction, configService) {
+    await interaction.deferReply({ ephemeral: true });
+    const config = await configService.exportConfig(interaction.guild.id);
+    
+    // Create a temporary file with the configuration
+    const fs = require('fs');
+    const path = require('path');
+    const tempFile = path.join(__dirname, `../../temp/${interaction.guild.id}_config.json`);
+    
+    fs.writeFileSync(tempFile, JSON.stringify(config, null, 2));
+    
+    await interaction.editReply({
+      content: '✅ Here is your configuration export:',
+      files: [tempFile],
+      ephemeral: true,
+    });
+    
+    // Clean up
+    setTimeout(() => {
+      try {
+        fs.unlinkSync(tempFile);
+      } catch (error) {
+        logger.error('Error deleting temp file:', error);
+      }
+    }, 10000);
+  },
+
+  async handleImport(interaction, configService) {
+    await interaction.deferReply({ ephemeral: true });
+    
+    const attachment = interaction.options.getAttachment('config_file');
+    if (!attachment.name.endsWith('.json')) {
+      return await interaction.editReply({
+        content: '❌ Please upload a valid JSON configuration file.',
+        ephemeral: true,
+      });
+    }
     
     try {
-      // Get current configuration
-      const config = await this.getGuildConfig(guildId);
+      const response = await fetch(attachment.url);
+      const config = await response.json();
       
-      // Create main setup embed
-      const embed = SetupUI.createMainEmbed(client, interaction.guild, config);
+      await configService.importConfig(interaction.guild.id, config);
       
-      // Create menu components
-      const menuRow = SetupUI.createCategoryMenu();
-      const actionRow = SetupUI.createMainActionButtons();
-
-      // Send the setup panel
-      const response = await interaction.reply({
-        embeds: [embed],
-        components: [menuRow, actionRow],
-        flags: 64, // ephemeral flag
+      await interaction.editReply({
+        content: '✅ Configuration imported successfully!',
+        ephemeral: true,
       });
-
-      // Set up interaction collector
-      const filter = (i) => i.user.id === interaction.user.id;
-      const collector = response.createMessageComponentCollector({
-        filter,
-        time: 10 * 60 * 1000, // 10 minutes
-      });
-
-      collector.on('collect', async (componentInteraction) => {
-        // Defer the interaction immediately to prevent timeout
-        if (!componentInteraction.deferred && !componentInteraction.replied) {
-          await componentInteraction.deferUpdate();
-        }
-
-        try {
-          // Route interactions to appropriate handlers
-          await this.routeInteraction(componentInteraction, client, guildId);
-        } catch (error) {
-          logger.error('Error handling setup interaction:', error);
-          
-          // Only send error message if we haven't already responded
-          if (!componentInteraction.replied) {
-            try {
-              await componentInteraction.editReply({
-                content: '❌ An error occurred. Please try again.',
-                embeds: [],
-                components: [],
-              });
-            } catch (editError) {
-              logger.error('Error sending error message:', editError);
-            }
-          }
-        }
-      });
-
-      collector.on('end', () => {
-        // Disable components when expired
-        try {
-          SetupUI.disableComponents(interaction);
-        } catch (error) {
-          logger.error('Error disabling components:', error);
-        }
-      });
-
     } catch (error) {
-      logger.error('Error in handleSetupPanel:', error);
-      if (!interaction.replied) {
-        await interaction.reply({
-          content: '❌ Failed to load setup panel. Please check database connection.',
-          flags: 64, // ephemeral flag
-        });
-      }
-    }
-  },
-
-  async routeInteraction(interaction, client, guildId) {
-    const { customId } = interaction;
-
-    // Category selection
-    if (customId === 'setup_category_select') {
-      const category = interaction.values[0];
-      const config = await this.getGuildConfig(guildId);
-      
-      switch (category) {
-        case 'tickets':
-          await TicketSetup.showMenu(interaction, client, config);
-          break;
-        case 'shop':
-          await ShopSetup.showMenu(interaction, client, config);
-          break;
-        case 'general':
-          await GeneralSetup.showMenu(interaction, client, config);
-          break;
-        default:
-          await interaction.editReply({
-            content: '❌ Unknown category selected.',
-            embeds: [],
-            components: [],
-          });
-      }
-      return;
-    }
-
-    // Main panel buttons
-    if (customId === 'setup_check_config') {
-      const updatedConfig = await this.getGuildConfig(guildId);
-      await SetupUI.showCurrentConfig(interaction, client, updatedConfig);
-      return;
-    }
-
-    if (customId === 'setup_help_button') {
-      await SetupUI.showHelp(interaction, client);
-      return;
-    }
-
-    if (customId === 'setup_reset') {
-      await SetupUI.showResetConfirmation(interaction, client);
-      return;
-    }
-
-    // Back to main
-    if (customId === 'setup_back_main') {
-      const updatedConfig = await this.getGuildConfig(guildId);
-      const embed = SetupUI.createMainEmbed(client, interaction.guild, updatedConfig);
-      const menuRow = SetupUI.createCategoryMenu();
-      const actionRow = SetupUI.createMainActionButtons();
-
+      logger.error('Error importing configuration:', error);
       await interaction.editReply({
-        embeds: [embed],
-        components: [menuRow, actionRow],
-      });
-      return;
-    }
-
-    // Route to specific modules
-    if (customId.startsWith('ticket_')) {
-      await TicketSetup.handleInteraction(interaction, client);
-    } else if (customId.startsWith('shop_')) {
-      await ShopSetup.handleInteraction(interaction, client);
-    } else if (customId.startsWith('general_')) {
-      await GeneralSetup.handleInteraction(interaction, client);
-    } else {
-      // Handle unknown interactions
-      logger.warn('Unknown interaction customId:', customId);
-      await interaction.editReply({
-        content: '❌ Unknown interaction. Please try again.',
-        embeds: [],
-        components: [],
+        content: '❌ Invalid configuration file. Please ensure it is a valid JSON export.',
+        ephemeral: true,
       });
     }
   },
 
-  async getGuildConfig(guildId) {
-    try {
-      // Create the table if it doesn't exist
-      await db.query(`
-        CREATE TABLE IF NOT EXISTS guild_configs (
-          id SERIAL PRIMARY KEY,
-          guild_id VARCHAR(20) NOT NULL UNIQUE,
-          ticket_category_id VARCHAR(20),
-          support_role_id VARCHAR(20),
-          log_channel_id VARCHAR(20),
-          shop_channel_id VARCHAR(20),
-          customer_role_id VARCHAR(20),
-          created_at TIMESTAMP DEFAULT NOW(),
-          updated_at TIMESTAMP DEFAULT NOW()
-        )
-      `);
-
-      const result = await db.query(
-        'SELECT * FROM guild_configs WHERE guild_id = $1',
-        [guildId]
-      );
-      
-      return result.rows[0] || {
-        guild_id: guildId,
-        ticket_category_id: null,
-        support_role_id: null,
-        log_channel_id: null,
-        shop_channel_id: null,
-        customer_role_id: null,
-        created_at: new Date(),
-        updated_at: new Date()
-      };
-    } catch (error) {
-      logger.error('Error getting guild config:', error);
-      return {
-        guild_id: guildId,
-        ticket_category_id: null,
-        support_role_id: null,
-        log_channel_id: null,
-        shop_channel_id: null,
-        customer_role_id: null,
-        created_at: new Date(),
-        updated_at: new Date()
-      };
-    }
+  async handleView(interaction, client, configService) {
+    const config = await configService.getGuildConfig(interaction.guild.id);
+    const embed = createConfigViewEmbed(client, interaction.guild, config);
+    
+    await interaction.reply({
+      embeds: [embed],
+      ephemeral: true,
+    });
   }
 };
