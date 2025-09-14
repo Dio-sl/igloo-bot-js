@@ -1,424 +1,609 @@
+// src/commands/admin/setup/TicketSetup.js
 const {
+  ChannelType,
   EmbedBuilder,
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
   StringSelectMenuBuilder,
-  ChannelType,
 } = require('discord.js');
 
-const { db } = require('../../../database/Database');
+const BaseSetupModule = require('./BaseSetupModule');
 const { logger } = require('../../../utils/logger');
-const SetupUI = require('./setupUI'); // ← Perfect! ✅
 
-module.exports = {
-  // Show the ticket setup menu
-  async showMenu(interaction, client, config) {
-    const embed = new EmbedBuilder()
-      .setColor(SetupUI.COLORS.PRIMARY)
-      .setTitle('🎫 Ticket System Setup')
-      .setDescription('Configure your server\'s ticket system settings')
-      .setThumbnail(client.user.displayAvatarURL())
-      .addFields(
-        {
-          name: 'Current Configuration',
-          value: SetupUI.getTicketStatusText(config),
-          inline: false,
-        },
-        {
-          name: 'Available Settings',
-          value: [
-            '**📁 Ticket Category** - Where ticket channels are created',
-            '**👮 Support Role** - Members with access to all tickets',
-            '**📋 Log Channel** - Where ticket events are logged',
-          ].join('\n'),
-          inline: false,
-        },
-        {
-          name: '🚀 Quick Setup',
-          value: 'Click the buttons below to configure each setting, then create your ticket panel!',
-          inline: false,
-        }
-      );
+/**
+ * TicketSetup - Handles ticket system configuration
+ * @extends BaseSetupModule
+ */
+class TicketSetup extends BaseSetupModule {
+  /**
+   * Get the configuration section name for this module
+   * @returns {string} Configuration section name
+   */
+  getConfigSection() {
+    return 'tickets';
+  }
 
-    // Create settings buttons
-    const settingsRow = new ActionRowBuilder()
-      .addComponents(
-        new ButtonBuilder()
-          .setCustomId('ticket_set_category')
-          .setLabel('Set Category')
-          .setStyle(ButtonStyle.Primary)
-          .setEmoji('📁'),
-        new ButtonBuilder()
-          .setCustomId('ticket_set_role')
-          .setLabel('Set Support Role')
-          .setStyle(ButtonStyle.Primary)
-          .setEmoji('👮'),
-        new ButtonBuilder()
-          .setCustomId('ticket_set_logs')
-          .setLabel('Set Log Channel')
-          .setStyle(ButtonStyle.Primary)
-          .setEmoji('📋')
-      );
+  /**
+   * Get settings definitions for this module
+   * @returns {Array<Object>} Settings definitions
+   */
+  getSettingsDefinitions() {
+    return [
+      {
+        key: 'category',
+        label: 'Ticket Category',
+        emoji: '📁',
+        type: 'channel',
+        channelTypes: [ChannelType.GuildCategory],
+        required: true,
+        description: 'Category where ticket channels will be created'
+      },
+      {
+        key: 'support_role',
+        label: 'Support Role',
+        emoji: '👮',
+        type: 'role',
+        required: true,
+        description: 'Role that can access and manage tickets'
+      },
+      {
+        key: 'log_channel',
+        label: 'Log Channel',
+        emoji: '📋',
+        type: 'channel',
+        channelTypes: [ChannelType.GuildText],
+        required: false,
+        description: 'Channel for ticket logs and transcripts'
+      },
+      {
+        key: 'auto_close_hours',
+        label: 'Auto-Close Time',
+        emoji: '⏱️',
+        type: 'number',
+        required: false,
+        default: 72,
+        min: 1,
+        max: 720,
+        description: 'Hours of inactivity before auto-closing tickets',
+        presets: [
+          { label: '24 Hours', value: 24 },
+          { label: '48 Hours', value: 48 },
+          { label: '72 Hours', value: 72 },
+          { label: '7 Days', value: 168 }
+        ]
+      },
+      {
+        key: 'max_open_tickets',
+        label: 'Max Tickets Per User',
+        emoji: '🔢',
+        type: 'number',
+        required: false,
+        default: 5,
+        min: 1,
+        max: 50,
+        description: 'Maximum number of open tickets per user'
+      },
+      {
+        key: 'welcome_message',
+        label: 'Welcome Message',
+        emoji: '📝',
+        type: 'text',
+        multiline: true,
+        required: false,
+        maxLength: 2000,
+        description: 'Message sent when a ticket is created',
+        placeholder: 'Thanks for opening a ticket! Our support team will assist you shortly.'
+      }
+    ];
+  }
 
-    // Create action buttons
-    const actionRow = new ActionRowBuilder()
-      .addComponents(
-        new ButtonBuilder()
-          .setCustomId('setup_back_main')
-          .setLabel('Back to Main Menu')
-          .setStyle(ButtonStyle.Secondary)
-          .setEmoji('↩️'),
-        new ButtonBuilder()
-          .setCustomId('ticket_create_panel')
-          .setLabel('Create Ticket Panel')
-          .setStyle(ButtonStyle.Success)
-          .setEmoji('✅')
-          .setDisabled(!this.isTicketSystemConfigured(config))
-      );
-
-    await interaction.update({
-      embeds: [embed],
-      components: [settingsRow, actionRow],
-    });
-  },
-
-  // Handle ticket-related interactions
-  async handleInteraction(interaction, client) {
-    const { customId } = interaction;
-
-    switch (customId) {
-      case 'ticket_set_category':
-        await this.promptCategorySelection(interaction);
+  /**
+   * Prompt for setting value with customized UI
+   * @param {Interaction} interaction - Discord interaction
+   * @param {string} settingKey - Setting key
+   */
+  async promptSetting(interaction, settingKey) {
+    // Get setting definition
+    const setting = this.getSettingsDefinitions().find(s => s.key === settingKey);
+    
+    if (!setting) {
+      return await interaction.update({
+        content: `❌ Unknown setting: ${settingKey}`,
+        components: []
+      });
+    }
+    
+    // Dispatch to appropriate prompt method based on setting type
+    switch (setting.type) {
+      case 'channel':
+        await this.promptChannelSelection(interaction, setting);
         break;
-      case 'ticket_set_role':
-        await this.promptRoleSelection(interaction);
+        
+      case 'role':
+        await this.promptRoleSelection(interaction, setting);
         break;
-      case 'ticket_set_logs':
-        await this.promptLogChannelSelection(interaction);
+        
+      case 'text':
+        await this.promptTextInput(interaction, setting);
         break;
-      case 'ticket_create_panel':
-        await this.createTicketPanel(interaction, client);
+        
+      case 'number':
+        await this.promptNumberInput(interaction, setting);
         break;
+        
       default:
-        // Handle channel/role selection confirmations
-        if (customId.startsWith('ticket_confirm_')) {
-          await this.handleConfirmation(interaction, client);
+        await interaction.update({
+          content: `❌ Unsupported setting type: ${setting.type}`,
+          components: []
+        });
+    }
+  }
+
+  /**
+   * Prompt for channel selection
+   * @param {Interaction} interaction - Discord interaction
+   * @param {Object} setting - Setting definition
+   */
+  async promptChannelSelection(interaction, setting) {
+    // Get available channels
+    const channels = interaction.guild.channels.cache
+      .filter(channel => {
+        if (setting.channelTypes) {
+          return setting.channelTypes.includes(channel.type);
         }
-    }
-  },
-
-  // Handle direct setup from slash command
-  async handleDirectSetup(interaction, client) {
-    const category = interaction.options.getChannel('category');
-    const supportRole = interaction.options.getRole('support_role');
-    const logChannel = interaction.options.getChannel('log_channel');
-
-    const updates = [];
-    const updateValues = [];
-    let paramCount = 1;
-
-    if (category) {
-      updates.push(`ticket_category_id = $${paramCount++}`);
-      updateValues.push(category.id);
-    }
-
-    if (supportRole) {
-      updates.push(`support_role_id = $${paramCount++}`);
-      updateValues.push(supportRole.id);
-    }
-
-    if (logChannel) {
-      updates.push(`log_channel_id = $${paramCount++}`);
-      updateValues.push(logChannel.id);
-    }
-
-    if (updates.length === 0) {
-      return await interaction.reply({
-        content: '❌ Please specify at least one option to configure.',
-        ephemeral: true,
-      });
-    }
-
-    try {
-      updates.push(`updated_at = $${paramCount++}`);
-      updateValues.push(new Date());
-      updateValues.push(interaction.guild.id);
-
-      await db.query(
-        `INSERT INTO guild_configs (guild_id, ${updates.map((_, i) => updates[i].split(' = ')[0]).join(', ')}, created_at, updated_at) 
-         VALUES ($${paramCount}, ${updates.map((_, i) => `$${i + 1}`).join(', ')}, NOW(), $${paramCount - 1})
-         ON CONFLICT (guild_id) DO UPDATE SET ${updates.join(', ')}`,
-        updateValues
-      );
-
-      const embed = new EmbedBuilder()
-        .setColor(SetupUI.COLORS.SUCCESS)
-        .setTitle('✅ Ticket System Updated')
-        .setDescription('Your ticket system configuration has been updated successfully!')
-        .addFields(
-          category ? { name: '📁 Category', value: `<#${category.id}>`, inline: true } : null,
-          supportRole ? { name: '👮 Support Role', value: `<@&${supportRole.id}>`, inline: true } : null,
-          logChannel ? { name: '📋 Log Channel', value: `<#${logChannel.id}>`, inline: true } : null
-        ).filter(Boolean);
-
-      await interaction.reply({
-        embeds: [embed],
-        ephemeral: true,
-      });
-
-    } catch (error) {
-      logger.error('Error updating ticket configuration:', error);
-      await interaction.reply({
-        content: '❌ Failed to update ticket configuration. Please try again.',
-        ephemeral: true,
-      });
-    }
-  },
-
-  // Prompt for category selection
-  async promptCategorySelection(interaction) {
-    const categories = interaction.guild.channels.cache
-      .filter(channel => channel.type === ChannelType.GuildCategory)
+        return true;
+      })
       .first(25); // Discord limit
-
-    if (categories.length === 0) {
-      return await interaction.reply({
-        content: '❌ No categories found in this server. Please create a category first.',
-        ephemeral: true,
+    
+    if (channels.length === 0) {
+      return await interaction.update({
+        content: `❌ No suitable channels found. Please create a ${
+          setting.key === 'category' ? 'category' : 'channel'
+        } first.`,
+        components: [
+          new ActionRowBuilder()
+            .addComponents(
+              new ButtonBuilder()
+                .setCustomId(`tickets_back`)
+                .setLabel('Back')
+                .setStyle(ButtonStyle.Secondary)
+                .setEmoji('↩️')
+            )
+        ]
       });
     }
-
+    
     const embed = new EmbedBuilder()
-      .setColor(SetupUI.COLORS.PRIMARY)
-      .setTitle('📁 Select Ticket Category')
-      .setDescription('Choose the category where ticket channels will be created:');
-
+      .setColor(this.COLORS.PRIMARY)
+      .setTitle(`${setting.emoji} ${setting.label}`)
+      .setDescription(setting.description);
+    
     const selectMenu = new StringSelectMenuBuilder()
-      .setCustomId('ticket_confirm_category')
-      .setPlaceholder('Choose a category...')
+      .setCustomId(`tickets_select_${setting.key}`)
+      .setPlaceholder(`Select a ${setting.key === 'category' ? 'category' : 'channel'}...`)
       .addOptions(
-        categories.map(category => ({
-          label: category.name,
-          value: category.id,
-          description: `ID: ${category.id}`,
+        channels.map(channel => ({
+          label: channel.name,
+          description: `ID: ${channel.id}`,
+          value: channel.id
         }))
       );
-
-    const row = new ActionRowBuilder().addComponents(selectMenu);
-    const backButton = new ActionRowBuilder()
+    
+    const buttonRow = new ActionRowBuilder()
       .addComponents(
         new ButtonBuilder()
-          .setCustomId('setup_category_select')
-          .setLabel('Back')
+          .setCustomId(`tickets_back`)
+          .setLabel('Cancel')
           .setStyle(ButtonStyle.Secondary)
-          .setEmoji('↩️')
+          .setEmoji('❌')
       );
-
+    
     await interaction.update({
       embeds: [embed],
-      components: [row, backButton],
+      components: [
+        new ActionRowBuilder().addComponents(selectMenu),
+        buttonRow
+      ],
+      content: null
     });
-  },
+  }
 
-  // Prompt for role selection
-  async promptRoleSelection(interaction) {
+  /**
+   * Prompt for role selection
+   * @param {Interaction} interaction - Discord interaction
+   * @param {Object} setting - Setting definition
+   */
+  async promptRoleSelection(interaction, setting) {
+    // Get available roles
     const roles = interaction.guild.roles.cache
-      .filter(role => !role.managed && role.id !== interaction.guild.id)
+      .filter(role => !role.managed && role.id !== interaction.guild.id) // Skip managed roles and @everyone
+      .sort((a, b) => b.position - a.position) // Sort by position
       .first(25); // Discord limit
-
+    
     if (roles.length === 0) {
-      return await interaction.reply({
-        content: '❌ No suitable roles found in this server.',
-        ephemeral: true,
+      return await interaction.update({
+        content: `❌ No suitable roles found. Please create a role first.`,
+        components: [
+          new ActionRowBuilder()
+            .addComponents(
+              new ButtonBuilder()
+                .setCustomId(`tickets_back`)
+                .setLabel('Back')
+                .setStyle(ButtonStyle.Secondary)
+                .setEmoji('↩️')
+            )
+        ]
       });
     }
-
+    
     const embed = new EmbedBuilder()
-      .setColor(SetupUI.COLORS.PRIMARY)
-      .setTitle('👮 Select Support Role')
-      .setDescription('Choose the role that will have access to tickets:');
-
+      .setColor(this.COLORS.PRIMARY)
+      .setTitle(`${setting.emoji} ${setting.label}`)
+      .setDescription(setting.description);
+    
     const selectMenu = new StringSelectMenuBuilder()
-      .setCustomId('ticket_confirm_role')
-      .setPlaceholder('Choose a role...')
+      .setCustomId(`tickets_select_${setting.key}`)
+      .setPlaceholder('Select a role...')
       .addOptions(
         roles.map(role => ({
           label: role.name,
-          value: role.id,
-          description: `Members: ${role.members.size}`,
+          description: `ID: ${role.id}`,
+          value: role.id
         }))
       );
-
-    const row = new ActionRowBuilder().addComponents(selectMenu);
-    const backButton = new ActionRowBuilder()
+    
+    const buttonRow = new ActionRowBuilder()
       .addComponents(
         new ButtonBuilder()
-          .setCustomId('setup_category_select')
-          .setLabel('Back')
+          .setCustomId(`tickets_back`)
+          .setLabel('Cancel')
           .setStyle(ButtonStyle.Secondary)
-          .setEmoji('↩️')
+          .setEmoji('❌')
       );
-
+    
     await interaction.update({
       embeds: [embed],
-      components: [row, backButton],
+      components: [
+        new ActionRowBuilder().addComponents(selectMenu),
+        buttonRow
+      ],
+      content: null
     });
-  },
+  }
 
-  // Prompt for log channel selection
-  async promptLogChannelSelection(interaction) {
-    const channels = interaction.guild.channels.cache
-      .filter(channel => channel.type === ChannelType.GuildText)
-      .first(25); // Discord limit
-
-    if (channels.length === 0) {
-      return await interaction.reply({
-        content: '❌ No text channels found in this server.',
-        ephemeral: true,
-      });
-    }
-
+  /**
+   * Prompt for number input
+   * @param {Interaction} interaction - Discord interaction
+   * @param {Object} setting - Setting definition
+   */
+  async promptNumberInput(interaction, setting) {
+    // Get current configuration
+    const config = await this.configService.getGuildConfig(interaction.guild.id);
+    const currentValue = config.tickets?.[setting.key] || setting.default;
+    
     const embed = new EmbedBuilder()
-      .setColor(SetupUI.COLORS.PRIMARY)
-      .setTitle('📋 Select Log Channel')
-      .setDescription('Choose where ticket events will be logged:');
-
-    const selectMenu = new StringSelectMenuBuilder()
-      .setCustomId('ticket_confirm_logs')
-      .setPlaceholder('Choose a channel...')
-      .addOptions(
-        channels.map(channel => ({
-          label: `# ${channel.name}`,
-          value: channel.id,
-          description: `ID: ${channel.id}`,
-        }))
-      );
-
-    const row = new ActionRowBuilder().addComponents(selectMenu);
-    const backButton = new ActionRowBuilder()
+      .setColor(this.COLORS.PRIMARY)
+      .setTitle(`${setting.emoji} ${setting.label}`)
+      .setDescription(setting.description);
+    
+    if (setting.min !== undefined || setting.max !== undefined) {
+      let rangeText = 'Valid range: ';
+      if (setting.min !== undefined) rangeText += `${setting.min} to `;
+      if (setting.max !== undefined) rangeText += setting.max;
+      else rangeText += 'unlimited';
+      
+      embed.addFields({ name: 'Range', value: rangeText, inline: true });
+    }
+    
+    if (currentValue !== undefined) {
+      embed.addFields({ name: 'Current Value', value: `${currentValue}`, inline: true });
+    }
+    
+    // Create preset buttons for quick selection
+    const presets = setting.presets || [
+      { label: '1', value: 1 },
+      { label: '5', value: 5 },
+      { label: '10', value: 10 },
+      { label: '25', value: 25 },
+      { label: '50', value: 50 }
+    ];
+    
+    const presetButtons = presets.map(preset => {
+      return new ButtonBuilder()
+        .setCustomId(`tickets_number_${setting.key}_${preset.value}`)
+        .setLabel(preset.label)
+        .setStyle(currentValue === preset.value ? ButtonStyle.Success : ButtonStyle.Secondary);
+    });
+    
+    const navRow = new ActionRowBuilder()
       .addComponents(
         new ButtonBuilder()
-          .setCustomId('setup_category_select')
-          .setLabel('Back')
+          .setCustomId(`tickets_back`)
+          .setLabel('Cancel')
           .setStyle(ButtonStyle.Secondary)
-          .setEmoji('↩️')
+          .setEmoji('❌')
       );
-
+    
+    // Create rows for buttons
+    const components = [];
+    
+    if (presetButtons.length <= 5) {
+      components.push(new ActionRowBuilder().addComponents(presetButtons));
+    } else {
+      const firstRow = presetButtons.slice(0, 5);
+      const secondRow = presetButtons.slice(5);
+      
+      components.push(new ActionRowBuilder().addComponents(firstRow));
+      if (secondRow.length > 0) {
+        components.push(new ActionRowBuilder().addComponents(secondRow));
+      }
+    }
+    
+    components.push(navRow);
+    
     await interaction.update({
       embeds: [embed],
-      components: [row, backButton],
+      components: components,
+      content: null
     });
-  },
+  }
 
-  // Handle confirmation of selections
-  async handleConfirmation(interaction, client) {
-    const { customId, values } = interaction;
-    const selectedId = values[0];
-    const guildId = interaction.guild.id;
-
-    let field = '';
-    let displayName = '';
-
-    if (customId === 'ticket_confirm_category') {
-      field = 'ticket_category_id';
-      const category = interaction.guild.channels.cache.get(selectedId);
-      displayName = `📁 Category set to: **${category.name}**`;
-    } else if (customId === 'ticket_confirm_role') {
-      field = 'support_role_id';
-      const role = interaction.guild.roles.cache.get(selectedId);
-      displayName = `👮 Support role set to: **@${role.name}**`;
-    } else if (customId === 'ticket_confirm_logs') {
-      field = 'log_channel_id';
-      const channel = interaction.guild.channels.cache.get(selectedId);
-      displayName = `📋 Log channel set to: **#${channel.name}**`;
+  /**
+   * Handle number selection
+   * @param {Interaction} interaction - Discord interaction
+   * @param {string} customId - Custom ID of the interaction
+   */
+  async handleInteraction(interaction, customId) {
+    // Handle number selection buttons
+    if (customId.startsWith('tickets_number_')) {
+      const parts = customId.replace('tickets_number_', '').split('_');
+      const settingKey = parts[0];
+      const value = parseInt(parts[1], 10);
+      
+      await this.updateSetting(interaction, settingKey, value);
+      return;
     }
+    
+    // Call parent method for other interactions
+    await super.handleInteraction(interaction, customId);
+  }
 
+  /**
+   * Create a ticket panel
+   * @param {Interaction} interaction - Discord interaction
+   */
+  async createPanel(interaction) {
     try {
-      // Update database
-      await db.query(
-        `INSERT INTO guild_configs (guild_id, ${field}, created_at, updated_at) 
-         VALUES ($1, $2, NOW(), NOW())
-         ON CONFLICT (guild_id) DO UPDATE SET ${field} = $2, updated_at = NOW()`,
-        [guildId, selectedId]
-      );
-
-      // Show success message
-      const embed = new EmbedBuilder()
-        .setColor(SetupUI.COLORS.SUCCESS)
-        .setTitle('✅ Configuration Updated')
-        .setDescription(displayName)
-        .setFooter({
-          text: 'Going back to ticket setup...',
-          iconURL: client.user.displayAvatarURL(),
+      // Get configuration
+      const config = await this.configService.getGuildConfig(interaction.guild.id);
+      const ticketConfig = config.tickets || {};
+      
+      // Validate required settings
+      if (!ticketConfig.category || !ticketConfig.support_role) {
+        return await interaction.update({
+          content: '❌ Ticket category and support role must be configured before creating a panel.',
+          components: [
+            new ActionRowBuilder()
+              .addComponents(
+                new ButtonBuilder()
+                  .setCustomId('tickets_back')
+                  .setLabel('Back to Settings')
+                  .setStyle(ButtonStyle.Secondary)
+                  .setEmoji('↩️')
+              )
+          ],
+          embeds: []
         });
-
+      }
+      
+      // Create ticket panel embed
+      const panelEmbed = new EmbedBuilder()
+        .setColor(this.COLORS.PRIMARY)
+        .setTitle('🎫 Support Tickets')
+        .setDescription('Need help? Click the button below to open a support ticket.')
+        .addFields({
+          name: 'How it works',
+          value: [
+            '1. Click the button to create a ticket',
+            '2. Describe your issue in detail',
+            '3. Our support team will assist you as soon as possible',
+            '4. When your issue is resolved, the ticket will be closed'
+          ].join('\n'),
+          inline: false
+        })
+        .setFooter({
+          text: 'Powered by Igloo Bot',
+          iconURL: this.client.user.displayAvatarURL()
+        })
+        .setTimestamp();
+      
+      // Create ticket button
+      const buttonRow = new ActionRowBuilder()
+        .addComponents(
+          new ButtonBuilder()
+            .setCustomId('ticket_create')
+            .setLabel('Open a Ticket')
+            .setStyle(ButtonStyle.Primary)
+            .setEmoji('🎫')
+        );
+      
+      // Ask where to send the panel
+      const promptEmbed = new EmbedBuilder()
+        .setColor(this.COLORS.PRIMARY)
+        .setTitle('🎫 Create Ticket Panel')
+        .setDescription('Select a channel to send the ticket panel to:')
+        .setFooter({
+          text: 'The panel will be posted in the selected channel',
+          iconURL: this.client.user.displayAvatarURL()
+        });
+      
+      // Get text channels
+      const channels = interaction.guild.channels.cache
+        .filter(channel => channel.type === ChannelType.GuildText)
+        .first(25);
+      
+      if (channels.length === 0) {
+        return await interaction.update({
+          content: '❌ No text channels found. Please create a channel first.',
+          components: [
+            new ActionRowBuilder()
+              .addComponents(
+                new ButtonBuilder()
+                  .setCustomId('tickets_back')
+                  .setLabel('Back to Settings')
+                  .setStyle(ButtonStyle.Secondary)
+                  .setEmoji('↩️')
+              )
+          ],
+          embeds: []
+        });
+      }
+      
+      const selectMenu = new StringSelectMenuBuilder()
+        .setCustomId('tickets_panel_channel')
+        .setPlaceholder('Select a channel...')
+        .addOptions(
+          channels.map(channel => ({
+            label: channel.name,
+            description: `ID: ${channel.id}`,
+            value: channel.id
+          }))
+        );
+      
+      const actionRow = new ActionRowBuilder()
+        .addComponents(
+          new ButtonBuilder()
+            .setCustomId('tickets_back')
+            .setLabel('Cancel')
+            .setStyle(ButtonStyle.Secondary)
+            .setEmoji('❌')
+        );
+      
       await interaction.update({
-        embeds: [embed],
-        components: [],
+        embeds: [promptEmbed],
+        components: [
+          new ActionRowBuilder().addComponents(selectMenu),
+          actionRow
+        ],
+        content: null
       });
-
-      // After a short delay, go back to the ticket menu
-      setTimeout(async () => {
-        const config = await this.getGuildConfig(guildId);
-        await this.showMenu(interaction, client, config);
-      }, 2000);
-
+      
+      // Set up collector for channel selection
+      const message = await interaction.fetchReply();
+      const collector = message.createMessageComponentCollector({
+        filter: i => i.user.id === interaction.user.id && i.customId === 'tickets_panel_channel',
+        time: 60000,
+        max: 1
+      });
+      
+      collector.on('collect', async i => {
+        try {
+          await i.deferUpdate();
+          
+          const channelId = i.values[0];
+          const channel = interaction.guild.channels.cache.get(channelId);
+          
+          if (!channel) {
+            return await i.editReply({
+              content: '❌ Channel not found. Please try again.',
+              components: [
+                new ActionRowBuilder()
+                  .addComponents(
+                    new ButtonBuilder()
+                      .setCustomId('tickets_back')
+                      .setLabel('Back to Settings')
+                      .setStyle(ButtonStyle.Secondary)
+                      .setEmoji('↩️')
+                  )
+              ],
+              embeds: []
+            });
+          }
+          
+          // Send ticket panel to the selected channel
+          await channel.send({
+            embeds: [panelEmbed],
+            components: [buttonRow]
+          });
+          
+          // Show success message
+          await i.editReply({
+            content: `✅ Ticket panel created successfully in ${channel}!`,
+            components: [
+              new ActionRowBuilder()
+                .addComponents(
+                  new ButtonBuilder()
+                    .setCustomId('tickets_back')
+                    .setLabel('Back to Settings')
+                    .setStyle(ButtonStyle.Secondary)
+                    .setEmoji('↩️')
+                )
+            ],
+            embeds: []
+          });
+          
+          // Log panel creation
+          logger.info(`Ticket panel created in #${channel.name} (${channel.id}) by ${interaction.user.tag}`);
+        } catch (error) {
+          logger.error('Error creating ticket panel:', error);
+          
+          await i.editReply({
+            content: `❌ Error creating ticket panel: ${error.message}`,
+            components: [
+              new ActionRowBuilder()
+                .addComponents(
+                  new ButtonBuilder()
+                    .setCustomId('tickets_back')
+                    .setLabel('Back to Settings')
+                    .setStyle(ButtonStyle.Secondary)
+                    .setEmoji('↩️')
+                )
+            ],
+            embeds: []
+          });
+        }
+      });
+      
+      collector.on('end', (collected, reason) => {
+        if (reason === 'time' && collected.size === 0) {
+          interaction.editReply({
+            content: '❌ Channel selection timed out. Please try again.',
+            components: [
+              new ActionRowBuilder()
+                .addComponents(
+                  new ButtonBuilder()
+                    .setCustomId('tickets_back')
+                    .setLabel('Back to Settings')
+                    .setStyle(ButtonStyle.Secondary)
+                    .setEmoji('↩️')
+                )
+            ],
+            embeds: []
+          }).catch(error => {
+            logger.error('Error updating timed out message:', error);
+          });
+        }
+      });
     } catch (error) {
-      logger.error('Error updating ticket configuration:', error);
+      logger.error('Error in createPanel:', error);
+      
       await interaction.update({
-        content: '❌ Failed to update configuration. Please try again.',
-        embeds: [],
-        components: [],
+        content: `❌ An error occurred: ${error.message}`,
+        components: [
+          new ActionRowBuilder()
+            .addComponents(
+              new ButtonBuilder()
+                .setCustomId('tickets_back')
+                .setLabel('Back to Settings')
+                .setStyle(ButtonStyle.Secondary)
+                .setEmoji('↩️')
+            )
+        ],
+        embeds: []
       });
-    }
-  },
-
-  // Create ticket panel
-  async createTicketPanel(interaction, client) {
-    const embed = new EmbedBuilder()
-      .setColor(SetupUI.COLORS.PRIMARY)
-      .setTitle('🎫 Support Tickets')
-      .setDescription('Need help? Click the button below to create a support ticket!')
-      .setThumbnail(SetupUI.ASSETS.LOGO)
-      .addFields({
-        name: 'How it works:',
-        value: '• Click "Create Ticket" below\n• A private channel will be created\n• Our support team will help you\n• The ticket will be closed when resolved',
-      });
-
-    const button = new ActionRowBuilder()
-      .addComponents(
-        new ButtonBuilder()
-          .setCustomId('create_ticket')
-          .setLabel('Create Ticket')
-          .setStyle(ButtonStyle.Primary)
-          .setEmoji('🎫')
-      );
-
-    await interaction.followUp({
-      content: '✅ **Ticket panel created!** You can send this message anywhere:',
-      embeds: [embed],
-      components: [button],
-      ephemeral: true,
-    });
-  },
-
-  // Check if ticket system is properly configured
-  isTicketSystemConfigured(config) {
-    return config.ticket_category_id && config.support_role_id;
-  },
-
-  // Get guild configuration
-  async getGuildConfig(guildId) {
-    try {
-      const result = await db.query(
-        'SELECT * FROM guild_configs WHERE guild_id = $1',
-        [guildId]
-      );
-      return result.rows[0] || {};
-    } catch (error) {
-      logger.error('Error getting guild config:', error);
-      return {};
     }
   }
-};
+}
+
+module.exports = TicketSetup;
