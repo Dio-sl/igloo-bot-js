@@ -124,36 +124,54 @@ class TicketSetup {
             .setEmoji('💾')
         );
       
-      // Determine if we need to update or send a new message
-      if (interaction.replied || interaction.deferred) {
-        await interaction.editReply({
+      // Send or update the message
+      let message;
+      if (interaction.deferred) {
+        message = await interaction.editReply({
+          embeds: [setupEmbed],
+          components: [optionSelect, navigationButtons],
+        });
+      } else if (interaction.replied) {
+        message = await interaction.followUp({
           embeds: [setupEmbed],
           components: [optionSelect, navigationButtons],
         });
       } else {
-        await interaction.update({
-          embeds: [setupEmbed],
-          components: [optionSelect, navigationButtons],
-        });
+        try {
+          // Try to update first (for interactions from select menus)
+          message = await interaction.update({
+            embeds: [setupEmbed],
+            components: [optionSelect, navigationButtons],
+          });
+        } catch (e) {
+          // If update fails, reply instead (for command interactions)
+          message = await interaction.reply({
+            embeds: [setupEmbed],
+            components: [optionSelect, navigationButtons],
+            fetchReply: true,
+          });
+        }
       }
       
       // Create collector for interactions
-      this.createSetupCollector(interaction, config);
+      this.createSetupCollector(interaction, config, message);
       
     } catch (error) {
       logger.error('Error creating ticket setup UI:', error);
       
-      // Determine how to respond based on the interaction state
-      const errorResponse = {
-        content: '❌ An error occurred while creating the ticket setup UI. Please try again.',
-        components: [],
-        embeds: [],
-      };
-      
-      if (interaction.replied || interaction.deferred) {
-        await interaction.editReply(errorResponse);
-      } else {
-        await interaction.update(errorResponse);
+      // Try to respond with an error message, but handle already replied/deferred case
+      try {
+        const errorResponse = {
+          content: '❌ An error occurred while creating the ticket setup UI. Please try again.',
+          components: [],
+          embeds: [],
+        };
+        
+        if (!interaction.replied && !interaction.deferred) {
+          await interaction.reply(errorResponse);
+        }
+      } catch (replyError) {
+        logger.error('Error sending error message:', replyError);
       }
     }
   }
@@ -162,10 +180,11 @@ class TicketSetup {
    * Create a collector for ticket setup interactions
    * @param {Interaction} interaction - Command interaction
    * @param {Object} config - Guild configuration
+   * @param {Message} message - The message to collect interactions from
    */
-  createSetupCollector(interaction, config) {
+  createSetupCollector(interaction, config, message) {
     // Get the message to collect interactions from
-    const message = interaction.message || interaction;
+    message = message || interaction;
     
     // Create a collector for select menu interactions
     const collector = message.createMessageComponentCollector({
@@ -178,6 +197,9 @@ class TicketSetup {
         // Handle select menu interactions
         if (i.customId === 'ticket_setup_option') {
           const option = i.values[0];
+          
+          // Always defer the update first to prevent interaction failures
+          await i.deferUpdate().catch(e => logger.warn(`Could not defer ticket_setup_option:`, e));
           
           switch (option) {
             case 'category':
@@ -199,12 +221,15 @@ class TicketSetup {
         
         // Handle channel selection
         if (i.customId === 'channel_select') {
+          // Defer the update first
+          await i.deferUpdate().catch(e => logger.warn(`Could not defer channel_select:`, e));
+          
           // Make sure we have values
           if (!i.values || !i.values[0]) {
-            await i.reply({
+            await i.followUp({
               content: '❌ No channel selected. Please try again.',
               ephemeral: true,
-            });
+            }).catch(e => logger.error('Error sending channel select followup:', e));
             return;
           }
           
@@ -226,15 +251,15 @@ class TicketSetup {
           config.tickets[settingType] = channelId;
           
           // Show success message
-          await i.update({
+          await i.editReply({
             content: `✅ Successfully set the ${settingType === 'category' ? 'ticket category' : 'log channel'} to <#${channelId}>`,
             components: [],
             embeds: [],
-          });
+          }).catch(e => logger.error('Error sending success message:', e));
           
           // After a short delay, return to the main ticket setup
           setTimeout(async () => {
-            await this.createUI(interaction, config);
+            await this.createUI(interaction, config).catch(e => logger.error('Error returning to setup UI:', e));
           }, 2000);
           
           return;
@@ -242,12 +267,15 @@ class TicketSetup {
         
         // Handle role selection
         if (i.customId === 'role_select') {
+          // Defer the update first
+          await i.deferUpdate().catch(e => logger.warn(`Could not defer role_select:`, e));
+          
           // Make sure we have values
-          if (!i.values || !i.values[0]) {
-            await i.reply({
-              content: '❌ No role selected. Please try again.',
+          if (!i.values || i.values.length === 0) {
+            await i.followUp({
+              content: '❌ No roles selected. Please try again.',
               ephemeral: true,
-            });
+            }).catch(e => logger.error('Error sending role select followup:', e));
             return;
           }
           
@@ -266,15 +294,16 @@ class TicketSetup {
           config.tickets.support_role = roleId;
           
           // Show success message
-          await i.update({
-            content: `✅ Successfully set the support role to <@&${roleId}>`,
+          const roleList = `<@&${roleId}>`;
+          await i.editReply({
+            content: `✅ Successfully set the support role to: ${roleList}`,
             components: [],
             embeds: [],
-          });
+          }).catch(e => logger.error('Error sending success message:', e));
           
           // After a short delay, return to the main ticket setup
           setTimeout(async () => {
-            await this.createUI(interaction, config);
+            await this.createUI(interaction, config).catch(e => logger.error('Error returning to setup UI:', e));
           }, 2000);
           
           return;
@@ -282,6 +311,9 @@ class TicketSetup {
         
         // Handle auto-close time buttons
         if (i.customId.startsWith('auto_close_')) {
+          // Defer the update first
+          await i.deferUpdate().catch(e => logger.warn(`Could not defer auto_close:`, e));
+          
           const hours = parseInt(i.customId.split('_')[2]);
           
           // Update the config
@@ -297,15 +329,15 @@ class TicketSetup {
           config.tickets.auto_close_hours = hours;
           
           // Show success message
-          await i.update({
+          await i.editReply({
             content: `✅ Successfully set the auto-close time to ${hours} hours`,
             components: [],
             embeds: [],
-          });
+          }).catch(e => logger.error('Error sending success message:', e));
           
           // After a short delay, return to the main ticket setup
           setTimeout(async () => {
-            await this.createUI(interaction, config);
+            await this.createUI(interaction, config).catch(e => logger.error('Error returning to setup UI:', e));
           }, 2000);
           
           return;
@@ -317,23 +349,26 @@ class TicketSetup {
           collector.stop();
           
           // Defer the update to avoid errors
-          await i.deferUpdate();
+          await i.deferUpdate().catch(e => logger.warn(`Could not defer ticket_setup_back:`, e));
           
           // Return to the main setup menu
           const SetupWizard = require('./SetupWizard');
           const wizard = new SetupWizard(this.client, this.configService);
-          await wizard.start(interaction);
+          await wizard.start(interaction).catch(e => logger.error('Error returning to wizard:', e));
           
           return;
         }
         
         if (i.customId === 'ticket_setup_save') {
+          // Defer the update first
+          await i.deferUpdate().catch(e => logger.warn(`Could not defer ticket_setup_save:`, e));
+          
           // Show success message
-          await i.update({
+          await i.editReply({
             content: '✅ Ticket system settings saved successfully!',
             components: [],
             embeds: [],
-          });
+          }).catch(e => logger.error('Error sending save confirmation:', e));
           
           // Stop the collector
           collector.stop();
@@ -344,11 +379,14 @@ class TicketSetup {
       } catch (error) {
         logger.error('Error handling ticket setup interaction:', error);
         
+        // Only try to send an error message if the interaction hasn't been handled yet
         try {
-          await i.reply({
-            content: '❌ An error occurred while processing your selection. Please try again.',
-            ephemeral: true,
-          });
+          if (!i.replied && !i.deferred) {
+            await i.reply({
+              content: '❌ An error occurred while processing your selection. Please try again.',
+              ephemeral: true,
+            }).catch(e => logger.error('Error sending error reply:', e));
+          }
         } catch (replyError) {
           logger.error('Error sending error message:', replyError);
         }
@@ -358,11 +396,13 @@ class TicketSetup {
     collector.on('end', collected => {
       if (collected.size === 0) {
         // Timeout
-        interaction.editReply({
-          content: '⏱️ Ticket setup timed out. Please run the command again to continue setup.',
-          components: [],
-          embeds: [],
-        }).catch(e => logger.error('Error updating timed out setup:', e));
+        if (interaction.replied || interaction.deferred) {
+          interaction.editReply({
+            content: '⏱️ Ticket setup timed out. Please run the command again to continue setup.',
+            components: [],
+            embeds: [],
+          }).catch(e => logger.error('Error updating timed out setup:', e));
+        }
       }
     });
   }
@@ -380,10 +420,10 @@ class TicketSetup {
       );
       
       if (categories.size === 0) {
-        await interaction.reply({
+        await interaction.followUp({
           content: '❌ No category channels found in this server. Please create a category first.',
           ephemeral: true,
-        });
+        }).catch(e => logger.error('Error sending no categories message:', e));
         return;
       }
       
@@ -416,18 +456,15 @@ class TicketSetup {
             .addOptions(options)
         );
       
-      // Send the prompt
-      await interaction.update({
+      // Update the message with the new prompt
+      await interaction.editReply({
         embeds: [embed],
         components: [selectMenu],
-      });
+      }).catch(e => logger.error('Error sending category selection prompt:', e));
       
     } catch (error) {
       logger.error('Error prompting for category selection:', error);
-      await interaction.reply({
-        content: '❌ An error occurred while loading category channels. Please try again.',
-        ephemeral: true,
-      });
+      // Don't try to reply if interaction is already handled
     }
   }
   
@@ -444,10 +481,10 @@ class TicketSetup {
         .sort((a, b) => b.position - a.position); // Sort by position (highest first)
       
       if (roles.size === 0) {
-        await interaction.reply({
+        await interaction.followUp({
           content: '❌ No roles found in this server. Please create a role first.',
           ephemeral: true,
-        });
+        }).catch(e => logger.error('Error sending no roles message:', e));
         return;
       }
       
@@ -480,18 +517,15 @@ class TicketSetup {
             .addOptions(options)
         );
       
-      // Send the prompt
-      await interaction.update({
+      // Update the message with the new prompt
+      await interaction.editReply({
         embeds: [embed],
         components: [selectMenu],
-      });
+      }).catch(e => logger.error('Error sending role selection prompt:', e));
       
     } catch (error) {
       logger.error('Error prompting for role selection:', error);
-      await interaction.reply({
-        content: '❌ An error occurred while loading roles. Please try again.',
-        ephemeral: true,
-      });
+      // Don't try to reply if interaction is already handled
     }
   }
   
@@ -508,10 +542,10 @@ class TicketSetup {
       );
       
       if (textChannels.size === 0) {
-        await interaction.reply({
+        await interaction.followUp({
           content: '❌ No text channels found in this server. Please create a text channel first.',
           ephemeral: true,
-        });
+        }).catch(e => logger.error('Error sending no channels message:', e));
         return;
       }
       
@@ -544,18 +578,15 @@ class TicketSetup {
             .addOptions(options)
         );
       
-      // Send the prompt
-      await interaction.update({
+      // Update the message with the new prompt
+      await interaction.editReply({
         embeds: [embed],
         components: [selectMenu],
-      });
+      }).catch(e => logger.error('Error sending log channel selection prompt:', e));
       
     } catch (error) {
       logger.error('Error prompting for log channel selection:', error);
-      await interaction.reply({
-        content: '❌ An error occurred while loading channels. Please try again.',
-        ephemeral: true,
-      });
+      // Don't try to reply if interaction is already handled
     }
   }
   
@@ -613,18 +644,15 @@ class TicketSetup {
             .setStyle(ButtonStyle.Danger)
         );
       
-      // Send the prompt
-      await interaction.update({
+      // Update the message with the new prompt
+      await interaction.editReply({
         embeds: [embed],
         components: [hoursButtons1, hoursButtons2],
-      });
+      }).catch(e => logger.error('Error sending auto-close selection prompt:', e));
       
     } catch (error) {
       logger.error('Error prompting for auto-close hours:', error);
-      await interaction.reply({
-        content: '❌ An error occurred while creating the auto-close prompt. Please try again.',
-        ephemeral: true,
-      });
+      // Don't try to reply if interaction is already handled
     }
   }
 }
