@@ -1,4 +1,4 @@
-// Complete patched interactionCreate.js with fix for the 10062 Unknown Interaction error
+// Final enhanced version of interactionCreate.js with extensive error handling and interaction tracking
 const {
   Events,
   PermissionFlagsBits,
@@ -17,15 +17,23 @@ const { db } = require('../database/Database');
 // This prevents double-handling the same interaction
 const handledInteractions = new Set();
 
+// Clean up old interactions periodically to prevent memory leaks
+setInterval(() => {
+  console.log(`Cleaning up interaction tracking cache (size: ${handledInteractions.size})`);
+  handledInteractions.clear();
+}, 1000 * 60 * 30); // Clear every 30 minutes
+
 module.exports = {
   name: Events.InteractionCreate,
   async execute(interaction, client) {
     // Skip any interaction we've already handled
-    // This is key to fixing the 10062 Unknown Interaction error
     if (handledInteractions.has(interaction.id)) {
       console.log(`Skipping already handled interaction: ${interaction.id}`);
       return;
     }
+
+    // Debug logging for ALL interactions
+    console.log(`[INT] ${interaction.type} → ${interaction.customId || 'no-id'} (${interaction.componentType || 'no-component-type'})`);
     
     try {
       // Handle slash commands
@@ -42,44 +50,65 @@ module.exports = {
         return;
       }
 
-      // Handle ticket category dropdown specifically
-      if (interaction.customId === 'ticket_category_select') {
-        handledInteractions.add(interaction.id);
-        try {
-          await interaction.deferUpdate();
-          const selected = Array.isArray(interaction.values) && interaction.values.length
-            ? interaction.values[0]
-            : 'general';
-          await createTicket(interaction, client, selected);
-        } catch (error) {
-          logger.error('Error handling ticket category select:', error);
-        }
-        return;
-      }
+      // CRITICAL: Check for select menus
+      // Using multiple detection methods for maximum compatibility
+      const isSelectMenu = 
+        (interaction.componentType === 3) || 
+        (typeof interaction.isStringSelectMenu === 'function' && interaction.isStringSelectMenu()) ||
+        interaction.isStringSelectMenu;
 
-      // IMPORTANT: For all setup-related dropdowns, DO NOT HANDLE THEM HERE
-      // Let the collector in setup.js handle them exclusively
-      if (interaction.customId?.startsWith('setup_') && 
-          (interaction.isStringSelectMenu() || interaction.componentType === 3)) {
-        // Do not mark as handled - let the collector handle it
-        console.log(`Letting collector handle ${interaction.customId}`);
-        // DO NOT call deferUpdate() or reply() here - let the collector do it
-        return;
-      }
-      
-      // For any other select menu interaction (fallback)
-      if (interaction.isStringSelectMenu() || interaction.componentType === 3) {
+      if (isSelectMenu) {
+        // Handle ticket category dropdown specifically
+        if (interaction.customId === 'ticket_category_select') {
+          handledInteractions.add(interaction.id);
+          try {
+            await interaction.deferUpdate();
+            const selected = Array.isArray(interaction.values) && interaction.values.length
+              ? interaction.values[0]
+              : 'general';
+            await createTicket(interaction, client, selected);
+          } catch (error) {
+            console.error('Error handling ticket category select:', error);
+            logger.error('Error handling ticket category select:', error);
+          }
+          return;
+        }
+
+        // IMPORTANT: For all setup-related dropdowns, DO NOT HANDLE THEM HERE
+        // This includes anything that starts with setup_ or contains channel_select
+        // Let the collector in setup.js handle them exclusively
+        if (interaction.customId?.includes('setup_') || 
+            interaction.customId?.includes('channel_select')) {
+          // Do not mark as handled - let the collector handle it
+          console.log(`Letting collector handle ${interaction.customId}`);
+          // DO NOT call deferUpdate() or reply() here - let the collector do it
+          return;
+        }
+        
+        // Fallback for any other select menu
         handledInteractions.add(interaction.id);
-        console.log(`Acknowledging unspecified select menu: ${interaction.customId}`);
+        console.log(`Handling unspecified select menu: ${interaction.customId}`);
         try {
           await interaction.deferUpdate();
         } catch (error) {
-          logger.error(`Error acknowledging select menu:`, error);
+          console.error(`Error in unspecified select menu:`, error);
         }
-        return;
       }
     } catch (error) {
+      console.error('Error in interaction handler:', error);
       logger.error('Error in interaction handler:', error);
+      
+      try {
+        // Only try to reply if not already replied
+        if (!interaction.replied && !interaction.deferred) {
+          await interaction.reply({
+            content: 'An error occurred while processing this interaction. Please try again.',
+            ephemeral: true
+          }).catch(err => console.error('Error sending error reply:', err));
+        }
+      } catch (replyError) {
+        console.error('Error sending error message:', replyError);
+      }
     }
   }
 };
@@ -221,7 +250,7 @@ async function handleTicketButton(interaction, client) {
     await interaction.reply({
       content: 'Please select a category for your ticket:',
       components: [categorySelect],
-      ephemeral: true,
+      flags: 64, // Use flag instead of ephemeral option
     });
   } catch (error) {
     logger.error('Error handling ticket button:', error);
