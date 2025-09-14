@@ -6,6 +6,7 @@ const {
   ButtonBuilder,
   ButtonStyle,
   StringSelectMenuBuilder,
+  PermissionFlagsBits, // Add the missing import
 } = require('discord.js');
 
 const BaseSetupModule = require('./BaseSetupModule');

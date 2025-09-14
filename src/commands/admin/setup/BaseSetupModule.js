@@ -5,6 +5,10 @@ const {
   ButtonBuilder,
   ButtonStyle,
   StringSelectMenuBuilder,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
+  PermissionFlagsBits, // Add the missing import
 } = require('discord.js');
 
 const { logger } = require('../../../utils/logger');
