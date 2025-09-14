@@ -1,4 +1,4 @@
-// Enhanced fix for interactionCreate.js - catching ALL dropdown interactions
+// Enhanced interactionCreate.js with debug logging and ultra-aggressive dropdown fix
 const {
   Events,
   PermissionFlagsBits,
@@ -16,6 +16,30 @@ const { db } = require('../database/Database');
 module.exports = {
   name: Events.InteractionCreate,
   async execute(interaction, client) {
+    // DIRECT DEBUG LOGGING - Will appear in your terminal
+    console.log('\n===== INTERACTION DEBUG =====');
+    console.log('Type:', interaction.type);
+    console.log('CustomId:', interaction.customId);
+    console.log('ComponentType:', interaction.componentType);
+    console.log('isStringSelectMenu:', 
+      typeof interaction.isStringSelectMenu === 'function' 
+        ? interaction.isStringSelectMenu() 
+        : interaction.isStringSelectMenu);
+    console.log('Values:', interaction.values);
+    
+    // Log all properties of the interaction to help with debugging
+    console.log('All interaction properties:');
+    for (const prop in interaction) {
+      if (typeof interaction[prop] !== 'function' && prop !== 'client') {
+        try {
+          console.log(`- ${prop}:`, interaction[prop]);
+        } catch (err) {
+          console.log(`- ${prop}: [Cannot display]`);
+        }
+      }
+    }
+    console.log('===== END DEBUG =====\n');
+    
     try {
       // Handle slash commands
       if (interaction.isChatInputCommand()) {
@@ -37,20 +61,29 @@ module.exports = {
           interaction.customId?.includes('select') ||
           interaction.customId?.includes('channel')) {
         
+        console.log(`Handling select menu interaction with customId: ${interaction.customId}`);
         logger.info(`Handling select menu interaction with customId: ${interaction.customId}`);
         
         // Handle ticket category selection
         if (interaction.customId === 'ticket_category_select') {
           try {
             // Defer to keep the interaction alive
-            await interaction.deferUpdate().catch(err => logger.warn('Could not defer update:', err));
+            console.log('Deferring ticket_category_select update');
+            await interaction.deferUpdate().catch(err => {
+              console.error('Could not defer ticket_category_select update:', err);
+              logger.warn('Could not defer update:', err);
+            });
+            
             const selected = Array.isArray(interaction.values) && interaction.values.length
               ? interaction.values[0]
               : 'general';
 
+            console.log('Selected category:', selected);
+            
             // Create the ticket with the selected category
             await createTicket(interaction, client, selected);
           } catch (error) {
+            console.error('Error handling ticket category select:', error);
             logger.error('Error handling ticket category select:', error);
             try {
               if (!interaction.replied && !interaction.deferred) {
@@ -61,6 +94,7 @@ module.exports = {
                   .catch(err => logger.warn('Could not follow up:', err));
               }
             } catch (replyError) {
+              console.error('Error sending failure message:', replyError);
               logger.error('Error sending failure message:', replyError);
             }
           }
@@ -71,35 +105,49 @@ module.exports = {
           try {
             // Just acknowledge the interaction to prevent the "interaction failed" error
             // This is crucial - it keeps the interaction alive for other handlers
+            console.log(`Deferring select menu interaction: ${interaction.customId}`);
             await interaction.deferUpdate().catch(err => {
+              console.error(`Could not defer update for ${interaction.customId}:`, err);
               logger.warn(`Could not defer update for ${interaction.customId}:`, err);
+              
               // If we can't defer, try to acknowledge in a different way
               if (!interaction.replied && !interaction.deferred) {
+                console.log('Trying alternative reply method');
                 interaction.reply({ content: 'Processing...', ephemeral: true })
-                  .catch(e => logger.warn('Could not reply after defer failed:', e));
+                  .catch(e => {
+                    console.error('Could not reply after defer failed:', e);
+                    logger.warn('Could not reply after defer failed:', e);
+                  });
               }
             });
             
             // Log that we're letting the collector handle it
+            console.log(`Acknowledged select menu interaction ${interaction.customId}, letting collector handle it`);
             logger.info(`Acknowledged select menu interaction ${interaction.customId}, letting collector handle it`);
             
             // Don't do anything else - the collector in setup.js will handle the actual processing
             return;
           } catch (error) {
+            console.error(`Error acknowledging select menu ${interaction.customId}:`, error);
             logger.error(`Error acknowledging select menu ${interaction.customId}:`, error);
           }
         }
       }
     } catch (error) {
+      console.error('Error in interaction handler:', error);
       logger.error('Error in interaction handler:', error);
       try {
         if (!interaction.replied && !interaction.deferred) {
           await interaction.reply({ 
             content: 'An error occurred while processing this interaction. Please try again.', 
             ephemeral: true 
-          }).catch(err => logger.warn('Could not send error message:', err));
+          }).catch(err => {
+            console.error('Could not send error message:', err);
+            logger.warn('Could not send error message:', err);
+          });
         }
       } catch (replyError) {
+        console.error('Error sending error message:', replyError);
         logger.error('Error sending error message:', replyError);
       }
     }
