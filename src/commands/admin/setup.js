@@ -1264,6 +1264,9 @@ async function handleGeneralSetupMenu(interaction, client, config) {
 /**
  * Prompt for channel selection using a dropdown menu
  */
+// Enhanced fix for the collector in setup.js
+// Add this code to the promptChannelSelection function in your setup.js file
+
 async function promptChannelSelection(interaction, prompt, setting, types) {
   const guildId = interaction.guild.id;
   
@@ -1291,11 +1294,11 @@ async function promptChannelSelection(interaction, prompt, setting, types) {
     .setTitle('Channel Selection')
     .setDescription(prompt);
   
-  // Create the channel select menu
+  // Create the channel select menu - IMPORTANT: UPDATED CUSTOM ID
   const selectRow = new ActionRowBuilder()
     .addComponents(
       new StringSelectMenuBuilder()
-        .setCustomId('setup_channel_select')
+        .setCustomId(`setup_channel_select_${setting}`) // Add setting name to make it unique
         .setPlaceholder('Select a channel')
         .addOptions(availableChannels)
     );
@@ -1310,10 +1313,11 @@ async function promptChannelSelection(interaction, prompt, setting, types) {
         .setEmoji('✖️')
     );
   
+  // Use ephemeral flag instead of option
   const response = await interaction.reply({
     embeds: [embed],
     components: [selectRow, buttonRow],
-    ephemeral: true,
+    flags: 64, // This is the flag for ephemeral
   });
   
   // Create collector for the selection
@@ -1322,99 +1326,122 @@ async function promptChannelSelection(interaction, prompt, setting, types) {
   });
   
   collector.on('collect', async componentInteraction => {
-    // Handle channel selection
-    if (componentInteraction.customId === 'setup_channel_select') {
-      const channelId = componentInteraction.values[0];
-      const channel = interaction.guild.channels.cache.get(channelId);
-      
-      try {
-        // Save the channel ID to the database based on the setting
-        let updateField;
+    try {
+      // Handle channel selection - UPDATED CONDITION
+      if (componentInteraction.customId === `setup_channel_select_${setting}`) {
+        const channelId = componentInteraction.values[0];
+        const channel = interaction.guild.channels.cache.get(channelId);
         
-        switch (setting) {
-          case 'ticket_category':
-            updateField = 'ticket_category_id';
-            break;
-          case 'ticket_logs':
-            updateField = 'log_channel_id';
-            break;
-          case 'shop_channel':
-            updateField = 'shop_channel_id';
-            break;
-          case 'announcement_channel':
-            updateField = 'announcement_channel_id';
-            break;
-          default:
-            throw new Error('Unknown setting');
-        }
-        
-        // Get current config
-        const configResult = await db.query(
-          'SELECT * FROM guild_config WHERE guild_id = $1',
-          [guildId]
-        );
-        
-        if (configResult.rows.length === 0) {
-          // Insert new config
-          await db.query(
-            `INSERT INTO guild_config (guild_id, ${updateField})
-             VALUES ($1, $2)`,
-            [guildId, channelId]
-          );
-        } else {
-          // Update existing config
-          await db.query(
-            `UPDATE guild_config
-             SET ${updateField} = $1
-             WHERE guild_id = $2`,
-            [channelId, guildId]
-          );
-        }
-        
-        // Confirm the update
-        const successEmbed = new EmbedBuilder()
-          .setColor(COLORS.SUCCESS)
-          .setTitle('✅ Channel Set')
-          .setDescription(`Successfully set ${setting.replace('_', ' ')} to ${channel}!`)
-          .setFooter({ text: 'You can continue with other configuration options.' });
-        
-        await componentInteraction.update({
-          embeds: [successEmbed],
-          components: [],
-        });
-        
-        // After a short delay, go back to the appropriate setup menu
-        setTimeout(async () => {
-          const config = await getGuildConfig(guildId);
+        try {
+          // Immediately defer the update to acknowledge interaction
+          await componentInteraction.deferUpdate().catch(err => console.error(`Error deferring update: ${err}`));
           
-          if (setting === 'ticket_category' || setting === 'ticket_logs') {
-            await handleTicketSetupMenu(componentInteraction, client, config);
-          } else if (setting === 'shop_channel') {
-            await handleShopSetupMenu(componentInteraction, client, config);
-          } else if (setting === 'announcement_channel') {
-            await handleGeneralSetupMenu(componentInteraction, client, config);
+          // Save the channel ID to the database based on the setting
+          let updateField;
+          
+          switch (setting) {
+            case 'ticket_category':
+              updateField = 'ticket_category_id';
+              break;
+            case 'ticket_logs':
+              updateField = 'log_channel_id';
+              break;
+            case 'shop_channel':
+              updateField = 'shop_channel_id';
+              break;
+            case 'announcement_channel':
+              updateField = 'announcement_channel_id';
+              break;
+            default:
+              throw new Error('Unknown setting');
           }
-        }, 2000); // 2 second delay
-      } catch (error) {
-        logger.error('Error saving channel setting:', error);
-        await componentInteraction.update({
-          content: '❌ An error occurred while saving your setting. Please try again.',
-          embeds: [],
-          components: [],
-        });
+          
+          // Get current config
+          const configResult = await db.query(
+            'SELECT * FROM guild_config WHERE guild_id = $1',
+            [guildId]
+          );
+          
+          if (configResult.rows.length === 0) {
+            // Insert new config
+            await db.query(
+              `INSERT INTO guild_config (guild_id, ${updateField})
+                VALUES ($1, $2)`,
+              [guildId, channelId]
+            );
+          } else {
+            // Update existing config
+            await db.query(
+              `UPDATE guild_config
+                SET ${updateField} = $1
+                WHERE guild_id = $2`,
+              [channelId, guildId]
+            );
+          }
+          
+          // Confirm the update
+          const successEmbed = new EmbedBuilder()
+            .setColor(COLORS.SUCCESS)
+            .setTitle('✅ Channel Set')
+            .setDescription(`Successfully set ${setting.replace('_', ' ')} to ${channel}!`)
+            .setFooter({ text: 'You can continue with other configuration options.' });
+          
+          await componentInteraction.editReply({
+            embeds: [successEmbed],
+            components: [],
+          }).catch(err => console.error(`Error updating reply: ${err}`));
+          
+          // After a short delay, go back to the appropriate setup menu
+          setTimeout(async () => {
+            const config = await getGuildConfig(guildId);
+            
+            if (setting === 'ticket_category' || setting === 'ticket_logs') {
+              await handleTicketSetupMenu(componentInteraction, client, config);
+            } else if (setting === 'shop_channel') {
+              await handleShopSetupMenu(componentInteraction, client, config);
+            } else if (setting === 'announcement_channel') {
+              await handleGeneralSetupMenu(componentInteraction, client, config);
+            }
+          }, 2000); // 2 second delay
+        } catch (error) {
+          console.error('Error saving channel setting:', error);
+          await componentInteraction.followUp({
+            content: '❌ An error occurred while saving your setting. Please try again.',
+            ephemeral: true,
+          }).catch(err => console.error(`Error following up: ${err}`));
+        }
       }
-    }
-    
-    // Handle cancel button
-    if (componentInteraction.customId === 'setup_cancel') {
-      const config = await getGuildConfig(guildId);
       
-      if (setting === 'ticket_category' || setting === 'ticket_logs') {
-        await handleTicketSetupMenu(componentInteraction, client, config);
-      } else if (setting === 'shop_channel') {
-        await handleShopSetupMenu(componentInteraction, client, config);
-      } else if (setting === 'announcement_channel') {
-        await handleGeneralSetupMenu(componentInteraction, client, config);
+      // Handle cancel button
+      if (componentInteraction.customId === 'setup_cancel') {
+        await componentInteraction.deferUpdate().catch(err => console.error(`Error deferring cancel update: ${err}`));
+        
+        const config = await getGuildConfig(guildId);
+        
+        if (setting === 'ticket_category' || setting === 'ticket_logs') {
+          await handleTicketSetupMenu(componentInteraction, client, config);
+        } else if (setting === 'shop_channel') {
+          await handleShopSetupMenu(componentInteraction, client, config);
+        } else if (setting === 'announcement_channel') {
+          await handleGeneralSetupMenu(componentInteraction, client, config);
+        }
+      }
+    } catch (error) {
+      console.error('Error in collector:', error);
+      try {
+        if (!componentInteraction.replied && !componentInteraction.deferred) {
+          await componentInteraction.reply({
+            content: '❌ An error occurred while processing your selection. Please try again.',
+            ephemeral: true,
+          });
+        } else {
+          await componentInteraction.followUp({
+            content: '❌ An error occurred while processing your selection. Please try again.',
+            ephemeral: true,
+          });
+        }
+      } catch (replyError) {
+        console.error('Error sending error message:', replyError);
       }
     }
   });
@@ -1430,7 +1457,7 @@ async function promptChannelSelection(interaction, prompt, setting, types) {
       await interaction.editReply({
         embeds: [timeoutEmbed],
         components: [],
-      }).catch(err => logger.error('Error updating timed out channel selection:', err));
+      }).catch(err => console.error('Error updating timed out channel selection:', err));
     }
   });
 }
