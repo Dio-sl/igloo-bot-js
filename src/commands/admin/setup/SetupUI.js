@@ -208,7 +208,7 @@ module.exports = {
 
     const backButton = this.createBackButton();
 
-    await interaction.update({
+    await interaction.editReply({
       embeds: [embed],
       components: [backButton],
     });
@@ -250,7 +250,7 @@ module.exports = {
 
     const backButton = this.createBackButton();
 
-    await interaction.update({
+    await interaction.editReply({
       embeds: [embed],
       components: [backButton],
     });
@@ -290,13 +290,13 @@ module.exports = {
           .setEmoji('❌')
       );
 
-    await interaction.update({
+    await interaction.editReply({
       embeds: [embed],
       components: [confirmRow],
     });
   },
 
-  // Disable components when expired
+  // Disable components when expired - FIXED VERSION
   async disableComponents(interaction) {
     try {
       const expiredCategoryRow = new ActionRowBuilder()
@@ -334,7 +334,7 @@ module.exports = {
         components: [expiredCategoryRow, expiredActionRow]
       });
     } catch (error) {
-      // Ignore errors when disabling components
+      // Ignore errors when disabling components - this is expected if interaction expired
     }
   }
 };
