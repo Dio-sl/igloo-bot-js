@@ -14,10 +14,10 @@ const { logger } = require('../../utils/logger');
 const branding = require('../../config/branding');
 
 // Import setup modules
-const TicketSetup = require('./setup/TicketSetup');
+const TicketSetup = require('./setup/ticketSetup');
 const ShopSetup = require('./setup/ShopSetup');
 const GeneralSetup = require('./setup/GeneralSetup');
-const SetupUI = require('./setup/SetupUI');
+const SetupUI = require('./setup/setupUI');
 
 module.exports = {
   data: new SlashCommandBuilder()
