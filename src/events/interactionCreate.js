@@ -1,4 +1,4 @@
-// Fixed version of interactionCreate.js with enhanced StringSelectMenu handling
+// Enhanced interactionCreate.js with improved dropdown handling
 const {
   Events,
   PermissionFlagsBits,
@@ -20,9 +20,8 @@ const handledInteractions = new Set();
 
 // Clean up old interactions periodically to prevent memory leaks
 setInterval(() => {
-  const oldSize = handledInteractions.size;
+  console.log(`Cleaning up interaction tracking cache (size: ${handledInteractions.size})`);
   handledInteractions.clear();
-  logger.info(`Cleaned up interaction tracking cache (cleared ${oldSize} entries)`);
 }, 1000 * 60 * 30); // Clear every 30 minutes
 
 module.exports = {
@@ -30,12 +29,12 @@ module.exports = {
   async execute(interaction, client) {
     // Skip any interaction we've already handled
     if (handledInteractions.has(interaction.id)) {
-      logger.debug(`Skipping already handled interaction: ${interaction.id}`);
+      console.log(`Skipping already handled interaction: ${interaction.id}`);
       return;
     }
 
-    // Enhanced debug logging for ALL interactions
-    logger.debug(`[INT] Type: ${interaction.type}, ID: ${interaction.customId || 'no-id'}, ComponentType: ${interaction.componentType || 'no-component-type'}`);
+    // Debug logging for ALL interactions
+    console.log(`[INT] ${interaction.type} → ${interaction.customId || 'no-id'} (${interaction.componentType || 'no-component-type'})`);
     
     try {
       // Handle slash commands
@@ -52,67 +51,66 @@ module.exports = {
         return;
       }
 
-      // IMPROVED: Check for select menus using Discord.js v14 standards
-      // This approach is more reliable and future-proof
-      if (interaction.isStringSelectMenu()) {
+      // CRITICAL: Check for select menus
+      // Using multiple detection methods for maximum compatibility
+      const isSelectMenu = 
+        (interaction.componentType === 3) || 
+        (typeof interaction.isStringSelectMenu === 'function' && interaction.isStringSelectMenu()) ||
+        interaction.isStringSelectMenu;
+
+      if (isSelectMenu) {
         // Handle ticket category dropdown specifically
         if (interaction.customId === 'ticket_category_select') {
           handledInteractions.add(interaction.id);
           try {
-            await interaction.deferUpdate().catch(e => logger.warn('Could not defer update for ticket_category_select:', e));
-            const selected = interaction.values?.[0] || 'general';
+            // Always defer first to prevent interaction failures
+            await interaction.deferUpdate().catch(e => console.warn('Could not defer ticket_category_select:', e));
+            const selected = Array.isArray(interaction.values) && interaction.values.length
+              ? interaction.values[0]
+              : 'general';
             await createTicket(interaction, client, selected);
           } catch (error) {
+            console.error('Error handling ticket category select:', error);
             logger.error('Error handling ticket category select:', error);
-            // Attempt to notify user
-            try {
-              if (!interaction.replied && !interaction.deferred) {
-                await interaction.reply({
-                  content: 'An error occurred while processing your selection. Please try again.',
-                  ephemeral: true
-                });
-              } else {
-                await interaction.followUp({
-                  content: 'An error occurred while processing your selection. Please try again.',
-                  ephemeral: true
-                });
-              }
-            } catch (replyError) {
-              logger.error('Failed to send error message:', replyError);
-            }
           }
           return;
         }
 
-        // CRITICAL FIX: Improved handling for setup-related dropdowns
-        // More explicit check for setup dropdowns and enhanced logging
-        if (interaction.customId?.startsWith('setup_') || 
+        // IMPORTANT: For all setup-related dropdowns
+        // Immediately defer the update to prevent "interaction failed" errors
+        if (interaction.customId?.includes('setup_') || 
             interaction.customId?.includes('channel_select')) {
-          // Instead of marking it as handled immediately, let's log it and return
-          // This gives the collector in setup.js a chance to handle it
-          logger.info(`Detected setup dropdown: ${interaction.customId} - Delegating to collector`);
           
-          // Do NOT add to handledInteractions - let the collector handle it
-          // Do NOT call deferUpdate() or reply() here - let the collector do it
+          console.log(`Detected setup dropdown: ${interaction.customId} - Deferring then delegating to collector`);
+          
+          try {
+            // CRITICAL FIX: Immediately defer the update before delegating
+            // This prevents the "interaction failed" error
+            await interaction.deferUpdate().catch(e => console.warn(`Could not defer ${interaction.customId}:`, e));
+            
+            // Mark as handled after successful defer
+            handledInteractions.add(interaction.id);
+            
+            // The collector will now handle the rest of the interaction
+            console.log(`Successfully deferred and delegated: ${interaction.customId}`);
+          } catch (error) {
+            console.error(`Error deferring setup dropdown (${interaction.customId}):`, error);
+          }
+          
           return;
         }
         
         // Fallback for any other select menu
         handledInteractions.add(interaction.id);
-        logger.info(`Handling unspecified select menu: ${interaction.customId}`);
+        console.log(`Handling unspecified select menu: ${interaction.customId}`);
         try {
-          await interaction.deferUpdate().catch(e => logger.warn(`Could not defer update for ${interaction.customId}:`, e));
-          // Add a generic response for unhandled select menus
-          await interaction.followUp({
-            content: 'Your selection has been received. This feature is still in development.',
-            ephemeral: true
-          }).catch(e => logger.warn('Could not send followUp for unhandled select menu:', e));
+          await interaction.deferUpdate();
         } catch (error) {
-          logger.error(`Error in unspecified select menu (${interaction.customId}):`, error);
+          console.error(`Error in unspecified select menu:`, error);
         }
-        return;
       }
     } catch (error) {
+      console.error('Error in interaction handler:', error);
       logger.error('Error in interaction handler:', error);
       
       try {
@@ -121,15 +119,10 @@ module.exports = {
           await interaction.reply({
             content: 'An error occurred while processing this interaction. Please try again.',
             ephemeral: true
-          }).catch(err => logger.error('Error sending error reply:', err));
-        } else {
-          await interaction.followUp({
-            content: 'An error occurred while processing this interaction. Please try again.',
-            ephemeral: true
-          }).catch(err => logger.error('Error sending follow-up error reply:', err));
+          }).catch(err => console.error('Error sending error reply:', err));
         }
       } catch (replyError) {
-        logger.error('Error sending error message:', replyError);
+        console.error('Error sending error message:', replyError);
       }
     }
   }
@@ -474,6 +467,127 @@ async function createTicket(interaction, client, category) {
   }
 }
 
+// Function to get category information
+function getCategoryInfo(categoryValue) {
+  const categories = {
+    'buy': {
+      label: 'Buy',
+      emoji: '🛒',
+      description: 'Click for making a purchase',
+      color: 0x4CAF50 // Green
+    },
+    'general': {
+      label: 'General Support',
+      emoji: '🧊',
+      description: 'General questions and help',
+      color: 0x2196F3 // Blue
+    },
+    'order': {
+      label: 'Order Issues',
+      emoji: '📦',
+      description: 'Problems with orders',
+      color: 0xFF9800 // Orange
+    },
+    'technical': {
+      label: 'Technical Support',
+      emoji: '⚙️',
+      description: 'Technical difficulties',
+      color: 0x9C27B0 // Purple
+    }
+  };
+
+  return categories[categoryValue] || categories['general'];
+}
+
+// Function to get category-specific welcome messages
+function getCategoryWelcomeMessage(categoryValue) {
+  const messages = {
+    'buy': `Thank you for your interest in our products! 
+    
+Our sales team will be with you shortly to assist with your purchase. 
+
+In the meantime, please provide the following details if applicable:
+• Which product(s) you're interested in
+• Quantity needed
+• Any specific requirements or questions about the product`,
+
+    'general': `Thank you for reaching out to our support team!
+
+We'll be with you shortly to assist with your inquiry.
+
+Please provide any additional details that might help us assist you better.`,
+
+    'order': `Thank you for contacting us about your order.
+
+Our order support team will be with you shortly to help resolve any issues.
+
+To help us assist you faster, please provide:
+• Your order number (if available)
+• Date of purchase
+• Description of the issue you're experiencing`,
+
+    'technical': `Thank you for contacting technical support!
+
+Our tech team will be with you shortly to help troubleshoot your issue.
+
+To help us assist you faster, please provide:
+• Detailed description of the technical issue
+• Any error messages you're seeing
+• Steps you've already taken to resolve the issue`
+  };
+
+  return messages[categoryValue] || messages['general'];
+}
+
+// Function to get next ticket number
+async function getNextTicketNumber(guildId) {
+  const result = await db.query(
+    'SELECT COUNT(*) FROM tickets WHERE guild_id = $1',
+    [guildId]
+  );
+  return parseInt(result.rows[0].count) + 1;
+}
+
+// Function to handle claiming a ticket
+async function handleClaimTicket(interaction, ticket) {
+  // Only staff can claim tickets
+  if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageMessages)) {
+    await interaction.reply({
+      content: 'You do not have permission to claim tickets!',
+      ephemeral: true,
+    });
+    return;
+  }
+
+  if (ticket.claimed_by) {
+    await interaction.reply({
+      content: `This ticket is already claimed by <@${ticket.claimed_by}>!`,
+      ephemeral: true,
+    });
+    return;
+  }
+
+  // Update ticket in database
+  await db.query(
+    `UPDATE tickets 
+     SET claimed_by = $1, 
+         updated_at = CURRENT_TIMESTAMP 
+     WHERE id = $2`,
+    [interaction.user.id, ticket.id]
+  );
+
+  // Send confirmation
+  const embed = new EmbedBuilder()
+    .setTitle('👋 Ticket Claimed')
+    .setDescription(`This ticket has been claimed by <@${interaction.user.id}>`)
+    .setColor(0x00FF00)
+    .setTimestamp();
+
+  await interaction.reply({ embeds: [embed] });
+
+  logger.info(`Ticket ${ticket.ticket_id} claimed by ${interaction.user.tag}`);
+}
+
 // Function to handle closing a ticket
 async function handleCloseTicket(interaction, ticket) {
   // Check if user can close the ticket
@@ -579,125 +693,4 @@ async function handleDeleteTicket(interaction, ticket) {
       logger.error(`Failed to delete ticket channel: ${error}`);
     }
   }, 3000);
-}
-
-// Function to handle claiming a ticket
-async function handleClaimTicket(interaction, ticket) {
-  // Only staff can claim tickets
-  if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageMessages)) {
-    await interaction.reply({
-      content: 'You do not have permission to claim tickets!',
-      ephemeral: true,
-    });
-    return;
-  }
-
-  if (ticket.claimed_by) {
-    await interaction.reply({
-      content: `This ticket is already claimed by <@${ticket.claimed_by}>!`,
-      ephemeral: true,
-    });
-    return;
-  }
-
-  // Update ticket in database
-  await db.query(
-    `UPDATE tickets 
-     SET claimed_by = $1, 
-         updated_at = CURRENT_TIMESTAMP 
-     WHERE id = $2`,
-    [interaction.user.id, ticket.id]
-  );
-
-  // Send confirmation
-  const embed = new EmbedBuilder()
-    .setTitle('👋 Ticket Claimed')
-    .setDescription(`This ticket has been claimed by <@${interaction.user.id}>`)
-    .setColor(0x00FF00)
-    .setTimestamp();
-
-  await interaction.reply({ embeds: [embed] });
-
-  logger.info(`Ticket ${ticket.ticket_id} claimed by ${interaction.user.tag}`);
-}
-
-// Function to get category information
-function getCategoryInfo(categoryValue) {
-  const categories = {
-    'buy': {
-      label: 'Buy',
-      emoji: '🛒',
-      description: 'Click for making a purchase',
-      color: 0x4CAF50 // Green
-    },
-    'general': {
-      label: 'General Support',
-      emoji: '🧊',
-      description: 'General questions and help',
-      color: 0x2196F3 // Blue
-    },
-    'order': {
-      label: 'Order Issues',
-      emoji: '📦',
-      description: 'Problems with orders',
-      color: 0xFF9800 // Orange
-    },
-    'technical': {
-      label: 'Technical Support',
-      emoji: '⚙️',
-      description: 'Technical difficulties',
-      color: 0x9C27B0 // Purple
-    }
-  };
-
-  return categories[categoryValue] || categories['general'];
-}
-
-// Function to get category-specific welcome messages
-function getCategoryWelcomeMessage(categoryValue) {
-  const messages = {
-    'buy': `Thank you for your interest in our products! 
-    
-Our sales team will be with you shortly to assist with your purchase. 
-
-In the meantime, please provide the following details if applicable:
-• Which product(s) you're interested in
-• Quantity needed
-• Any specific requirements or questions about the product`,
-
-    'general': `Thank you for reaching out to our support team!
-
-We'll be with you shortly to assist with your inquiry.
-
-Please provide any additional details that might help us assist you better.`,
-
-    'order': `Thank you for contacting us about your order.
-
-Our order support team will be with you shortly to help resolve any issues.
-
-To help us assist you faster, please provide:
-• Your order number (if available)
-• Date of purchase
-• Description of the issue you're experiencing`,
-
-    'technical': `Thank you for contacting technical support!
-
-Our tech team will be with you shortly to help troubleshoot your issue.
-
-To help us assist you faster, please provide:
-• Detailed description of the technical issue
-• Any error messages you're seeing
-• Steps you've already taken to resolve the issue`
-  };
-
-  return messages[categoryValue] || messages['general'];
-}
-
-// Function to get next ticket number
-async function getNextTicketNumber(guildId) {
-  const result = await db.query(
-    'SELECT COUNT(*) FROM tickets WHERE guild_id = $1',
-    [guildId]
-  );
-  return parseInt(result.rows[0].count) + 1;
 }
