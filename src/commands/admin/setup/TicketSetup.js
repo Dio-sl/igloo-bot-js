@@ -9,7 +9,7 @@ const {
 
 const { db } = require('../../../database/Database');
 const { logger } = require('../../../utils/logger');
-const SetupUI = require('../SetupUI');  // Capital 'U' in 'UI'
+const SetupUI = require('./setupUI'); // ← Perfect! ✅
 
 module.exports = {
   // Show the ticket setup menu
