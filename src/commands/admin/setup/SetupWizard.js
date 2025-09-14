@@ -121,7 +121,7 @@ class SetupWizard {
       await interaction.editReply({
         content: '❌ An error occurred while starting the setup wizard. Please try again later.',
         components: [],
-      });
+      }).catch(e => logger.error('Error sending setup error message:', e));
     }
   }
   
@@ -132,35 +132,161 @@ class SetupWizard {
    * @param {Object} config - Guild configuration
    */
   createSectionCollector(interaction, message, config) {
+    // Create a collector for select menu interactions
     const collector = message.createMessageComponentCollector({
       filter: i => i.user.id === interaction.user.id,
       time: this.timeout,
-      componentType: ComponentType.StringSelect,
     });
     
     collector.on('collect', async i => {
-      // Handle section selection
-      if (i.customId === 'setup_section_select') {
-        const section = i.values[0];
-        
-        try {
-          switch (section) {
-            case 'tickets':
-              await this.ticketSetup.createUI(i, config);
-              break;
-            case 'shop':
-              await this.shopSetup.createUI(i, config);
-              break;
-            case 'general':
-              await this.generalSetup.createUI(i, config);
-              break;
+      try {
+        // Handle section selection
+        if (i.customId === 'setup_section_select') {
+          // IMPORTANT: Always defer the interaction first
+          await i.deferUpdate().catch(e => logger.warn(`Could not defer setup_section_select:`, e));
+          
+          const section = i.values[0];
+          console.log(`Detected setup dropdown: ${i.customId} - Selected ${section}`);
+          
+          // Create a new interaction response for the selected section
+          try {
+            switch (section) {
+              case 'tickets':
+                // Create a transitional message to prevent interaction conflicts
+                await i.editReply({
+                  content: '🎫 Loading ticket system setup...',
+                  embeds: [],
+                  components: [],
+                }).catch(e => logger.error('Error sending transition message:', e));
+                
+                // Wait a short delay to ensure Discord registers the edit
+                await new Promise(resolve => setTimeout(resolve, 500));
+                
+                // Now create the ticket setup UI with a new interaction
+                await this.ticketSetup.createUI(interaction, config);
+                break;
+                
+              case 'shop':
+                // Create a transitional message to prevent interaction conflicts
+                await i.editReply({
+                  content: '🛒 Loading shop system setup...',
+                  embeds: [],
+                  components: [],
+                }).catch(e => logger.error('Error sending transition message:', e));
+                
+                // Wait a short delay to ensure Discord registers the edit
+                await new Promise(resolve => setTimeout(resolve, 500));
+                
+                // Now create the shop setup UI with a new interaction
+                await this.shopSetup.createUI(interaction, config);
+                break;
+                
+              case 'general':
+                // Create a transitional message to prevent interaction conflicts
+                await i.editReply({
+                  content: '⚙️ Loading general settings setup...',
+                  embeds: [],
+                  components: [],
+                }).catch(e => logger.error('Error sending transition message:', e));
+                
+                // Wait a short delay to ensure Discord registers the edit
+                await new Promise(resolve => setTimeout(resolve, 500));
+                
+                // Now create the general setup UI with a new interaction
+                await this.generalSetup.createUI(interaction, config);
+                break;
+                
+              default:
+                await i.editReply({
+                  content: '❌ Unknown section selected. Please try again.',
+                  components: [],
+                  embeds: [],
+                }).catch(e => logger.error('Error sending unknown section message:', e));
+                
+                // After a short delay, go back to the main wizard
+                setTimeout(() => {
+                  this.start(interaction).catch(e => logger.error('Error restarting wizard:', e));
+                }, 2000);
+            }
+          } catch (error) {
+            logger.error(`Error handling setup section ${section}:`, error);
+            
+            // Try to respond with an error, but handle errors gracefully
+            try {
+              await i.editReply({
+                content: `❌ An error occurred while configuring ${section}. Please try again.`,
+                components: [],
+                embeds: [],
+              }).catch(e => logger.error('Error sending section error message:', e));
+              
+              // After a short delay, go back to the main wizard
+              setTimeout(() => {
+                this.start(interaction).catch(e => logger.error('Error restarting wizard after error:', e));
+              }, 3000);
+            } catch (replyError) {
+              logger.error('Error sending section error message:', replyError);
+            }
           }
-        } catch (error) {
-          logger.error(`Error handling setup section ${section}:`, error);
-          await i.reply({
-            content: `❌ An error occurred while configuring ${section}. Please try again.`,
-            ephemeral: true,
-          });
+        }
+        
+        // Handle navigation buttons
+        if (i.customId === 'setup_exit') {
+          // Stop the collector
+          collector.stop();
+          
+          // Always defer the update first
+          await i.deferUpdate().catch(e => logger.warn(`Could not defer setup_exit:`, e));
+          
+          // Send exit message
+          await i.editReply({
+            content: '✅ Setup wizard closed. You can run `/setup` again at any time.',
+            components: [],
+            embeds: [],
+          }).catch(e => logger.error('Error sending exit message:', e));
+        }
+        
+        if (i.customId === 'setup_complete') {
+          // Stop the collector
+          collector.stop();
+          
+          // Always defer the update first
+          await i.deferUpdate().catch(e => logger.warn(`Could not defer setup_complete:`, e));
+          
+          // Create and send the summary
+          try {
+            const summary = await this.createSummary(interaction.guild.id);
+            await i.editReply({
+              content: '✅ Setup complete! Here is your configuration summary:',
+              embeds: [summary],
+              components: [],
+            }).catch(e => logger.error('Error sending summary:', e));
+          } catch (error) {
+            logger.error('Error creating summary:', error);
+            await i.editReply({
+              content: '❌ An error occurred while creating the summary. Your settings have been saved.',
+              components: [],
+              embeds: [],
+            }).catch(e => logger.error('Error sending summary error message:', e));
+          }
+        }
+      } catch (error) {
+        logger.error('Error in setup wizard collector:', error);
+        
+        // Try to send an error message, but handle any errors
+        try {
+          if (!i.replied && !i.deferred) {
+            await i.reply({
+              content: '❌ An error occurred. Please try again.',
+              ephemeral: true,
+            }).catch(e => logger.error('Error sending collector error reply:', e));
+          } else {
+            await i.followUp({
+              content: '❌ An error occurred. Please try again.',
+              ephemeral: true,
+            }).catch(e => logger.error('Error sending collector error followup:', e));
+          }
+        } catch (replyError) {
+          logger.error('Error sending collector error message:', replyError);
         }
       }
     });
@@ -173,35 +299,6 @@ class SetupWizard {
           components: [],
           embeds: [],
         }).catch(e => logger.error('Error updating timed out wizard:', e));
-      }
-    });
-    
-    // Also create a button collector for navigation
-    const buttonCollector = message.createMessageComponentCollector({
-      filter: i => i.user.id === interaction.user.id && i.isButton(),
-      time: this.timeout,
-    });
-    
-    buttonCollector.on('collect', async i => {
-      if (i.customId === 'setup_exit') {
-        await i.update({
-          content: '✅ Setup wizard closed. You can run `/setup` again at any time.',
-          components: [],
-          embeds: [],
-        });
-        buttonCollector.stop();
-        collector.stop();
-      }
-      
-      if (i.customId === 'setup_complete') {
-        const summary = await this.createSummary(interaction.guild.id);
-        await i.update({
-          content: '✅ Setup complete! Here is your configuration summary:',
-          embeds: [summary],
-          components: [],
-        });
-        buttonCollector.stop();
-        collector.stop();
       }
     });
   }
