@@ -124,295 +124,304 @@ class TicketSetup {
             .setEmoji('💾')
         );
       
-      // Send or update the message
-      let message;
-      if (interaction.deferred) {
-        message = await interaction.editReply({
-          embeds: [setupEmbed],
-          components: [optionSelect, navigationButtons],
-        });
-      } else if (interaction.replied) {
-        message = await interaction.followUp({
-          embeds: [setupEmbed],
-          components: [optionSelect, navigationButtons],
-        });
-      } else {
-        try {
-          // Try to update first (for interactions from select menus)
-          message = await interaction.update({
+      // Determine the best way to send/update the message
+      let reply;
+      
+      try {
+        if (interaction.deferred || interaction.replied) {
+          reply = await interaction.editReply({
+            content: null,
             embeds: [setupEmbed],
             components: [optionSelect, navigationButtons],
           });
-        } catch (e) {
-          // If update fails, reply instead (for command interactions)
-          message = await interaction.reply({
+        } else {
+          // If it's a fresh interaction, defer it first
+          await interaction.deferReply({ ephemeral: true });
+          reply = await interaction.editReply({
             embeds: [setupEmbed],
             components: [optionSelect, navigationButtons],
-            fetchReply: true,
           });
         }
+        
+        // Create new collectors for this message
+        this.setupOptionCollectors(interaction, reply, config);
+        
+      } catch (error) {
+        logger.error('Error sending ticket setup UI:', error);
+        // If we failed to reply, try to send a new message
+        try {
+          await interaction.followUp({
+            content: '🎫 Ticket Setup',
+            embeds: [setupEmbed],
+            components: [optionSelect, navigationButtons],
+            ephemeral: true,
+          }).then(msg => {
+            this.setupOptionCollectors(interaction, msg, config);
+          });
+        } catch (followUpError) {
+          logger.error('Error sending followUp message:', followUpError);
+          // Last resort: try to send a new command
+          try {
+            await interaction.channel.send({
+              content: `<@${interaction.user.id}>, here's your ticket setup (the previous interaction expired):`,
+              embeds: [setupEmbed],
+              components: [optionSelect, navigationButtons],
+            }).then(msg => {
+              this.setupOptionCollectors(interaction, msg, config);
+            });
+          } catch (channelError) {
+            logger.error('Error sending channel message:', channelError);
+          }
+        }
       }
-      
-      // Create collector for interactions
-      this.createSetupCollector(interaction, config, message);
-      
     } catch (error) {
       logger.error('Error creating ticket setup UI:', error);
-      
-      // Try to respond with an error message, but handle already replied/deferred case
-      try {
-        const errorResponse = {
-          content: '❌ An error occurred while creating the ticket setup UI. Please try again.',
-          components: [],
-          embeds: [],
-        };
-        
-        if (!interaction.replied && !interaction.deferred) {
-          await interaction.reply(errorResponse);
-        }
-      } catch (replyError) {
-        logger.error('Error sending error message:', replyError);
-      }
     }
   }
   
   /**
-   * Create a collector for ticket setup interactions
-   * @param {Interaction} interaction - Command interaction
+   * Set up collectors for the ticket setup options
+   * @param {Interaction} interaction - Original interaction
+   * @param {Message} message - Message to collect from
    * @param {Object} config - Guild configuration
-   * @param {Message} message - The message to collect interactions from
    */
-  createSetupCollector(interaction, config, message) {
-    // Get the message to collect interactions from
-    message = message || interaction;
+  setupOptionCollectors(interaction, message, config) {
+    const filter = i => i.user.id === interaction.user.id;
     
-    // Create a collector for select menu interactions
     const collector = message.createMessageComponentCollector({
-      filter: i => i.user.id === interaction.user.id,
+      filter,
       time: this.timeout,
     });
     
     collector.on('collect', async i => {
       try {
-        // Handle select menu interactions
+        // Try to defer the update first
+        try {
+          await i.deferUpdate();
+        } catch (deferError) {
+          logger.warn(`Could not defer interaction ${i.customId}:`, deferError.message);
+          // Continue anyway - we'll handle the response differently if deferring failed
+        }
+        
+        // Handle option selection
         if (i.customId === 'ticket_setup_option') {
           const option = i.values[0];
           
-          // Always defer the update first to prevent interaction failures
-          await i.deferUpdate().catch(e => logger.warn(`Could not defer ticket_setup_option:`, e));
-          
-          switch (option) {
-            case 'category':
-              await this.promptCategorySelect(i, config);
-              break;
-            case 'support_role':
-              await this.promptRoleSelect(i, config);
-              break;
-            case 'log_channel':
-              await this.promptLogChannelSelect(i, config);
-              break;
-            case 'auto_close_hours':
-              await this.promptAutoCloseHours(i, config);
-              break;
+          // Create a new message with the selected option UI
+          try {
+            switch (option) {
+              case 'category':
+                await this.showCategorySelection(i, config);
+                break;
+              case 'support_role':
+                await this.showRoleSelection(i, config);
+                break;
+              case 'log_channel':
+                await this.showLogChannelSelection(i, config);
+                break;
+              case 'auto_close_hours':
+                await this.showAutoCloseOptions(i, config);
+                break;
+            }
+          } catch (optionError) {
+            logger.error(`Error handling option ${option}:`, optionError);
+            await this.safeReply(i, {
+              content: `❌ Error configuring ${option}. Please try again.`,
+              embeds: [],
+              components: [],
+            });
+            
+            // Try to return to the main menu after a short delay
+            setTimeout(() => {
+              this.createUI(interaction, config).catch(e => 
+                logger.error('Error returning to setup UI after option error:', e)
+              );
+            }, 2000);
           }
-          
-          return;
-        }
-        
-        // Handle channel selection
-        if (i.customId === 'channel_select') {
-          // Defer the update first
-          await i.deferUpdate().catch(e => logger.warn(`Could not defer channel_select:`, e));
-          
-          // Make sure we have values
-          if (!i.values || !i.values[0]) {
-            await i.followUp({
-              content: '❌ No channel selected. Please try again.',
-              ephemeral: true,
-            }).catch(e => logger.error('Error sending channel select followup:', e));
-            return;
-          }
-          
-          const channelId = i.values[0];
-          const settingType = i.message.embeds[0].title.includes('Category') 
-            ? 'category' 
-            : 'log_channel';
-          
-          // Update the config
-          await this.configService.updateGuildConfig(
-            interaction.guild.id,
-            'tickets',
-            settingType,
-            channelId
-          );
-          
-          // Update the config object
-          if (!config.tickets) config.tickets = {};
-          config.tickets[settingType] = channelId;
-          
-          // Show success message
-          await i.editReply({
-            content: `✅ Successfully set the ${settingType === 'category' ? 'ticket category' : 'log channel'} to <#${channelId}>`,
-            components: [],
-            embeds: [],
-          }).catch(e => logger.error('Error sending success message:', e));
-          
-          // After a short delay, return to the main ticket setup
-          setTimeout(async () => {
-            await this.createUI(interaction, config).catch(e => logger.error('Error returning to setup UI:', e));
-          }, 2000);
-          
-          return;
-        }
-        
-        // Handle role selection
-        if (i.customId === 'role_select') {
-          // Defer the update first
-          await i.deferUpdate().catch(e => logger.warn(`Could not defer role_select:`, e));
-          
-          // Make sure we have values
-          if (!i.values || i.values.length === 0) {
-            await i.followUp({
-              content: '❌ No roles selected. Please try again.',
-              ephemeral: true,
-            }).catch(e => logger.error('Error sending role select followup:', e));
-            return;
-          }
-          
-          const roleId = i.values[0];
-          
-          // Update the config
-          await this.configService.updateGuildConfig(
-            interaction.guild.id,
-            'tickets',
-            'support_role',
-            roleId
-          );
-          
-          // Update the config object
-          if (!config.tickets) config.tickets = {};
-          config.tickets.support_role = roleId;
-          
-          // Show success message
-          const roleList = `<@&${roleId}>`;
-          await i.editReply({
-            content: `✅ Successfully set the support role to: ${roleList}`,
-            components: [],
-            embeds: [],
-          }).catch(e => logger.error('Error sending success message:', e));
-          
-          // After a short delay, return to the main ticket setup
-          setTimeout(async () => {
-            await this.createUI(interaction, config).catch(e => logger.error('Error returning to setup UI:', e));
-          }, 2000);
-          
-          return;
-        }
-        
-        // Handle auto-close time buttons
-        if (i.customId.startsWith('auto_close_')) {
-          // Defer the update first
-          await i.deferUpdate().catch(e => logger.warn(`Could not defer auto_close:`, e));
-          
-          const hours = parseInt(i.customId.split('_')[2]);
-          
-          // Update the config
-          await this.configService.updateGuildConfig(
-            interaction.guild.id,
-            'tickets',
-            'auto_close_hours',
-            hours
-          );
-          
-          // Update the config object
-          if (!config.tickets) config.tickets = {};
-          config.tickets.auto_close_hours = hours;
-          
-          // Show success message
-          await i.editReply({
-            content: `✅ Successfully set the auto-close time to ${hours} hours`,
-            components: [],
-            embeds: [],
-          }).catch(e => logger.error('Error sending success message:', e));
-          
-          // After a short delay, return to the main ticket setup
-          setTimeout(async () => {
-            await this.createUI(interaction, config).catch(e => logger.error('Error returning to setup UI:', e));
-          }, 2000);
-          
-          return;
         }
         
         // Handle navigation buttons
-        if (i.customId === 'ticket_setup_back') {
-          // Stop this collector
+        else if (i.customId === 'ticket_setup_back') {
           collector.stop();
           
-          // Defer the update to avoid errors
-          await i.deferUpdate().catch(e => logger.warn(`Could not defer ticket_setup_back:`, e));
-          
-          // Return to the main setup menu
-          const SetupWizard = require('./SetupWizard');
-          const wizard = new SetupWizard(this.client, this.configService);
-          await wizard.start(interaction).catch(e => logger.error('Error returning to wizard:', e));
-          
-          return;
-        }
-        
-        if (i.customId === 'ticket_setup_save') {
-          // Defer the update first
-          await i.deferUpdate().catch(e => logger.warn(`Could not defer ticket_setup_save:`, e));
-          
-          // Show success message
-          await i.editReply({
-            content: '✅ Ticket system settings saved successfully!',
-            components: [],
-            embeds: [],
-          }).catch(e => logger.error('Error sending save confirmation:', e));
-          
-          // Stop the collector
-          collector.stop();
-          
-          return;
-        }
-        
-      } catch (error) {
-        logger.error('Error handling ticket setup interaction:', error);
-        
-        // Only try to send an error message if the interaction hasn't been handled yet
-        try {
-          if (!i.replied && !i.deferred) {
-            await i.reply({
-              content: '❌ An error occurred while processing your selection. Please try again.',
-              ephemeral: true,
-            }).catch(e => logger.error('Error sending error reply:', e));
+          try {
+            await this.safeReply(i, {
+              content: '⬅️ Returning to main menu...',
+              embeds: [],
+              components: [],
+            });
+            
+            // Return to the main menu after a short delay
+            setTimeout(async () => {
+              try {
+                const SetupWizard = require('./SetupWizard');
+                const wizard = new SetupWizard(this.client, this.configService);
+                await wizard.start(interaction);
+              } catch (wizardError) {
+                logger.error('Error starting setup wizard:', wizardError);
+              }
+            }, 1000);
+          } catch (backError) {
+            logger.error('Error handling back button:', backError);
           }
-        } catch (replyError) {
-          logger.error('Error sending error message:', replyError);
         }
+        
+        else if (i.customId === 'ticket_setup_save') {
+          collector.stop();
+          
+          try {
+            await this.safeReply(i, {
+              content: '✅ Ticket settings saved successfully!',
+              embeds: [],
+              components: [],
+            });
+          } catch (saveError) {
+            logger.error('Error handling save button:', saveError);
+          }
+        }
+        
+        // Handle channel selection
+        else if (i.customId === 'channel_select') {
+          try {
+            if (!i.values || !i.values[0]) {
+              await this.safeReply(i, {
+                content: '❌ No channel selected. Please try again.',
+                ephemeral: true,
+              });
+              return;
+            }
+            
+            const channelId = i.values[0];
+            const settingType = i.message.embeds[0].title.includes('Category') 
+              ? 'category' 
+              : 'log_channel';
+            
+            // Update the config
+            await this.configService.updateGuildConfig(
+              interaction.guild.id,
+              'tickets',
+              settingType,
+              channelId
+            );
+            
+            // Update the config object
+            if (!config.tickets) config.tickets = {};
+            config.tickets[settingType] = channelId;
+            
+            // Show success message
+            await this.safeReply(i, {
+              content: `✅ Successfully set the ${settingType === 'category' ? 'ticket category' : 'log channel'} to <#${channelId}>`,
+              components: [],
+              embeds: [],
+            });
+            
+            // After a short delay, return to the main ticket setup
+            setTimeout(() => {
+              this.createUI(interaction, config).catch(e => 
+                logger.error('Error returning to setup UI after channel selection:', e)
+              );
+            }, 2000);
+          } catch (channelError) {
+            logger.error('Error handling channel selection:', channelError);
+          }
+        }
+        
+        // Handle role selection
+        else if (i.customId === 'role_select') {
+          try {
+            if (!i.values || i.values.length === 0) {
+              await this.safeReply(i, {
+                content: '❌ No role selected. Please try again.',
+                ephemeral: true,
+              });
+              return;
+            }
+            
+            const roleId = i.values[0];
+            
+            // Update the config
+            await this.configService.updateGuildConfig(
+              interaction.guild.id,
+              'tickets',
+              'support_role',
+              roleId
+            );
+            
+            // Update the config object
+            if (!config.tickets) config.tickets = {};
+            config.tickets.support_role = roleId;
+            
+            // Show success message
+            await this.safeReply(i, {
+              content: `✅ Successfully set the support role to <@&${roleId}>`,
+              components: [],
+              embeds: [],
+            });
+            
+            // After a short delay, return to the main ticket setup
+            setTimeout(() => {
+              this.createUI(interaction, config).catch(e => 
+                logger.error('Error returning to setup UI after role selection:', e)
+              );
+            }, 2000);
+          } catch (roleError) {
+            logger.error('Error handling role selection:', roleError);
+          }
+        }
+        
+        // Handle auto-close time buttons
+        else if (i.customId.startsWith('auto_close_')) {
+          try {
+            const hours = parseInt(i.customId.split('_')[2]);
+            
+            // Update the config
+            await this.configService.updateGuildConfig(
+              interaction.guild.id,
+              'tickets',
+              'auto_close_hours',
+              hours
+            );
+            
+            // Update the config object
+            if (!config.tickets) config.tickets = {};
+            config.tickets.auto_close_hours = hours;
+            
+            // Show success message
+            await this.safeReply(i, {
+              content: `✅ Successfully set the auto-close time to ${hours} hours`,
+              components: [],
+              embeds: [],
+            });
+            
+            // After a short delay, return to the main ticket setup
+            setTimeout(() => {
+              this.createUI(interaction, config).catch(e => 
+                logger.error('Error returning to setup UI after auto-close selection:', e)
+              );
+            }, 2000);
+          } catch (timeError) {
+            logger.error('Error handling auto-close time selection:', timeError);
+          }
+        }
+      } catch (error) {
+        logger.error('Error handling interaction:', error);
       }
     });
     
     collector.on('end', collected => {
       if (collected.size === 0) {
-        // Timeout
-        if (interaction.replied || interaction.deferred) {
-          interaction.editReply({
-            content: '⏱️ Ticket setup timed out. Please run the command again to continue setup.',
-            components: [],
-            embeds: [],
-          }).catch(e => logger.error('Error updating timed out setup:', e));
-        }
+        // Timeout - do nothing, just let the collector end
+        logger.info('Ticket setup collector timed out');
       }
     });
   }
   
   /**
-   * Prompt for category channel selection
-   * @param {Interaction} interaction - Command interaction
+   * Show category selection UI
+   * @param {Interaction} interaction - Interaction
    * @param {Object} config - Guild configuration
    */
-  async promptCategorySelect(interaction, config) {
+  async showCategorySelection(interaction, config) {
     try {
       // Get all category channels
       const categories = interaction.guild.channels.cache.filter(
@@ -420,10 +429,10 @@ class TicketSetup {
       );
       
       if (categories.size === 0) {
-        await interaction.followUp({
+        await this.safeReply(interaction, {
           content: '❌ No category channels found in this server. Please create a category first.',
           ephemeral: true,
-        }).catch(e => logger.error('Error sending no categories message:', e));
+        });
         return;
       }
       
@@ -456,24 +465,23 @@ class TicketSetup {
             .addOptions(options)
         );
       
-      // Update the message with the new prompt
-      await interaction.editReply({
+      // Send the prompt
+      await this.safeReply(interaction, {
         embeds: [embed],
         components: [selectMenu],
-      }).catch(e => logger.error('Error sending category selection prompt:', e));
-      
+      });
     } catch (error) {
-      logger.error('Error prompting for category selection:', error);
-      // Don't try to reply if interaction is already handled
+      logger.error('Error showing category selection:', error);
+      throw error;
     }
   }
   
   /**
-   * Prompt for support role selection
-   * @param {Interaction} interaction - Command interaction
+   * Show role selection UI
+   * @param {Interaction} interaction - Interaction
    * @param {Object} config - Guild configuration
    */
-  async promptRoleSelect(interaction, config) {
+  async showRoleSelection(interaction, config) {
     try {
       // Get all roles except @everyone
       const roles = interaction.guild.roles.cache
@@ -481,10 +489,10 @@ class TicketSetup {
         .sort((a, b) => b.position - a.position); // Sort by position (highest first)
       
       if (roles.size === 0) {
-        await interaction.followUp({
+        await this.safeReply(interaction, {
           content: '❌ No roles found in this server. Please create a role first.',
           ephemeral: true,
-        }).catch(e => logger.error('Error sending no roles message:', e));
+        });
         return;
       }
       
@@ -517,24 +525,23 @@ class TicketSetup {
             .addOptions(options)
         );
       
-      // Update the message with the new prompt
-      await interaction.editReply({
+      // Send the prompt
+      await this.safeReply(interaction, {
         embeds: [embed],
         components: [selectMenu],
-      }).catch(e => logger.error('Error sending role selection prompt:', e));
-      
+      });
     } catch (error) {
-      logger.error('Error prompting for role selection:', error);
-      // Don't try to reply if interaction is already handled
+      logger.error('Error showing role selection:', error);
+      throw error;
     }
   }
   
   /**
-   * Prompt for log channel selection
-   * @param {Interaction} interaction - Command interaction
+   * Show log channel selection UI
+   * @param {Interaction} interaction - Interaction
    * @param {Object} config - Guild configuration
    */
-  async promptLogChannelSelect(interaction, config) {
+  async showLogChannelSelection(interaction, config) {
     try {
       // Get all text channels
       const textChannels = interaction.guild.channels.cache.filter(
@@ -542,10 +549,10 @@ class TicketSetup {
       );
       
       if (textChannels.size === 0) {
-        await interaction.followUp({
+        await this.safeReply(interaction, {
           content: '❌ No text channels found in this server. Please create a text channel first.',
           ephemeral: true,
-        }).catch(e => logger.error('Error sending no channels message:', e));
+        });
         return;
       }
       
@@ -578,24 +585,23 @@ class TicketSetup {
             .addOptions(options)
         );
       
-      // Update the message with the new prompt
-      await interaction.editReply({
+      // Send the prompt
+      await this.safeReply(interaction, {
         embeds: [embed],
         components: [selectMenu],
-      }).catch(e => logger.error('Error sending log channel selection prompt:', e));
-      
+      });
     } catch (error) {
-      logger.error('Error prompting for log channel selection:', error);
-      // Don't try to reply if interaction is already handled
+      logger.error('Error showing log channel selection:', error);
+      throw error;
     }
   }
   
   /**
-   * Prompt for auto-close hours selection
-   * @param {Interaction} interaction - Command interaction
+   * Show auto-close options UI
+   * @param {Interaction} interaction - Interaction
    * @param {Object} config - Guild configuration
    */
-  async promptAutoCloseHours(interaction, config) {
+  async showAutoCloseOptions(interaction, config) {
     try {
       // Create the embed
       const embed = new EmbedBuilder()
@@ -644,15 +650,62 @@ class TicketSetup {
             .setStyle(ButtonStyle.Danger)
         );
       
-      // Update the message with the new prompt
-      await interaction.editReply({
+      // Send the prompt
+      await this.safeReply(interaction, {
         embeds: [embed],
         components: [hoursButtons1, hoursButtons2],
-      }).catch(e => logger.error('Error sending auto-close selection prompt:', e));
-      
+      });
     } catch (error) {
-      logger.error('Error prompting for auto-close hours:', error);
-      // Don't try to reply if interaction is already handled
+      logger.error('Error showing auto-close options:', error);
+      throw error;
+    }
+  }
+  
+  /**
+   * Safely reply to an interaction, handling different states
+   * @param {Interaction} interaction - Interaction to reply to
+   * @param {Object} options - Reply options
+   * @returns {Promise<Message|void>} Message or void
+   */
+  async safeReply(interaction, options) {
+    try {
+      // If the interaction has been deferred or replied to, edit the reply
+      if (interaction.deferred || interaction.replied) {
+        return await interaction.editReply(options);
+      }
+      
+      // If it's a new interaction, try to update it
+      try {
+        return await interaction.update(options);
+      } catch (updateError) {
+        logger.warn('Could not update interaction, trying followUp:', updateError.message);
+        
+        // If update fails, try followUp
+        try {
+          return await interaction.followUp({
+            ...options,
+            ephemeral: true,
+          });
+        } catch (followUpError) {
+          logger.warn('Could not followUp, trying to send in channel:', followUpError.message);
+          
+          // Last resort: try to send a new message in the channel
+          if (interaction.channel) {
+            return await interaction.channel.send({
+              content: `<@${interaction.user.id}>, ${options.content || ''}`,
+              embeds: options.embeds || [],
+              components: options.components || [],
+            });
+          }
+          
+          // If all else fails, log the error
+          logger.error('All attempts to reply failed');
+          throw new Error('Could not reply to interaction');
+        }
+      }
+    } catch (error) {
+      logger.error('Error in safeReply:', error);
+      throw error;
     }
   }
 }
