@@ -6,7 +6,7 @@ const {
   ButtonBuilder,
   ButtonStyle,
   StringSelectMenuBuilder,
-  PermissionFlagsBits, // Correctly import PermissionFlagsBits
+  PermissionFlagsBits,
 } = require('discord.js');
 
 const { db } = require('../../database/Database');
@@ -74,6 +74,15 @@ module.exports = {
     if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
       return await interaction.reply({
         content: '❌ You need Administrator permission to use this command.',
+        ephemeral: true,
+      });
+    }
+
+    // Make sure ConfigService is properly instantiated
+    if (typeof ConfigService !== 'function') {
+      logger.error('ConfigService is not a constructor, actual type:', typeof ConfigService);
+      return await interaction.reply({
+        content: '❌ Bot configuration system is not available. Please contact an administrator.',
         ephemeral: true,
       });
     }
