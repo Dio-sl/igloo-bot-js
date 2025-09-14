@@ -1,4 +1,4 @@
-// Fixed interaction handler for the ticket category selection with proper imports
+// Fixed interactionCreate.js with proper handling for channel selection dropdown
 const {
   Events,
   PermissionFlagsBits,
@@ -8,7 +8,7 @@ const {
   ButtonBuilder,
   ButtonStyle,
   StringSelectMenuBuilder,
-  ChannelType // Added this import which was missing
+  ChannelType
 } = require('discord.js');
 const { logger } = require('../utils/logger');
 const { db } = require('../database/Database');
@@ -16,70 +16,260 @@ const { db } = require('../database/Database');
 module.exports = {
   name: Events.InteractionCreate,
   async execute(interaction, client) {
-    // Handle slash commands
-    if (interaction.isChatInputCommand()) {
-      await handleCommand(interaction, client);
-    }
+    try {
+      // Handle slash commands
+      if (interaction.isChatInputCommand()) {
+        await handleCommand(interaction, client);
+      }
 
-    // Handle button interactions
-    if (interaction.isButton()) {
-      await handleButton(interaction, client);
-    }
+      // Handle button interactions
+      if (interaction.isButton()) {
+        await handleButton(interaction, client);
+      }
 
-    // Handle select menu interactions (category selection for tickets)
-    if (interaction.isStringSelectMenu()) {
-      if (interaction.customId === 'ticket_category_select') {
-        try {
-          // Defer to keep the interaction alive
-          await interaction.deferUpdate();
-          const selected = Array.isArray(interaction.values) && interaction.values.length
-            ? interaction.values[0]
-            : 'general';
-
-          // Get category display info
-          const categoryInfo = getCategoryInfo(selected);
-
-          // We'll handle the ticket creation directly here instead of trying to reuse the command
-          // This fixes the "ticketCreateCmd.execute is not a function" error
-          // Pass just the category value, not the entire categoryInfo object
-          await createTicket(interaction, client, selected);
-
-        } catch (error) {
-          logger.error('Error handling ticket category select:', error);
+      // Handle ALL select menu interactions
+      // Using isSelectMenu() or checking componentType to catch all select menu types
+      if (interaction.isStringSelectMenu() || (interaction.componentType === 3)) {
+        // Handle channel selection for setup
+        if (interaction.customId === 'setup_channel_select') {
+          // This is called when a channel is selected from the dropdown
+          // The processing logic is already in the setup.js file
+          // We don't need to do anything here because the collector in setup.js handles it
+          return;
+        }
+        // Handle ticket category selection
+        else if (interaction.customId === 'ticket_category_select') {
           try {
-            if (!interaction.replied && !interaction.deferred) {
-              await interaction.reply({ content: 'Failed to create the ticket. Try /ticket manually.', ephemeral: true });
-            } else {
-              await interaction.followUp({ content: 'Failed to create the ticket. Try /ticket manually.', ephemeral: true });
+            // Defer to keep the interaction alive
+            await interaction.deferUpdate();
+            const selected = Array.isArray(interaction.values) && interaction.values.length
+              ? interaction.values[0]
+              : 'general';
+
+            // Get category display info
+            const categoryInfo = getCategoryInfo(selected);
+
+            // We'll handle the ticket creation directly here instead of trying to reuse the command
+            // This fixes the "ticketCreateCmd.execute is not a function" error
+            // Pass just the category value, not the entire categoryInfo object
+            await createTicket(interaction, client, selected);
+
+          } catch (error) {
+            logger.error('Error handling ticket category select:', error);
+            try {
+              if (!interaction.replied && !interaction.deferred) {
+                await interaction.reply({ content: 'Failed to create the ticket. Try /ticket manually.', ephemeral: true });
+              } else {
+                await interaction.followUp({ content: 'Failed to create the ticket. Try /ticket manually.', ephemeral: true });
+              }
+            } catch (replyError) {
+              logger.error('Error sending failure message:', replyError);
             }
-          } catch (replyError) {
-            logger.error('Error sending failure message:', replyError);
           }
         }
+      }
+    } catch (error) {
+      logger.error('Error in interaction handler:', error);
+      try {
+        if (!interaction.replied && !interaction.deferred) {
+          await interaction.reply({ 
+            content: 'An error occurred while processing this interaction. Please try again.', 
+            ephemeral: true 
+          });
+        }
+      } catch (replyError) {
+        logger.error('Error sending error message:', replyError);
       }
     }
   }
 };
 
-// Function to directly create a ticket from the dropdown selection
-// REPLACEMENT FOR THE createTicket FUNCTION IN interactionCreate.js
-// Copy this entire function and replace your existing createTicket function
+// Function to handle slash commands
+async function handleCommand(interaction, client) {
+  const { commandName } = interaction;
+  const command = client.commands.get(commandName);
+
+  if (!command) {
+    logger.warn(`Command ${commandName} not found`);
+    return;
+  }
+
+  try {
+    await command.execute(interaction, client);
+  } catch (error) {
+    logger.error(`Error executing command ${commandName}:`, error);
+    
+    try {
+      if (!interaction.replied && !interaction.deferred) {
+        await interaction.reply({
+          content: 'An error occurred while executing this command.',
+          ephemeral: true,
+        });
+      } else {
+        await interaction.followUp({
+          content: 'An error occurred while executing this command.',
+          ephemeral: true,
+        });
+      }
+    } catch (replyError) {
+      logger.error('Error sending error message:', replyError);
+    }
+  }
+}
+
+// Function to handle ticket creation from a command
+async function handleTicketCreation(interaction, client) {
+  const category = interaction.options.getString('category') || 'general';
+  const description = interaction.options.getString('description') || 'No description provided';
+  
+  // Create ticket with the selected category
+  await createTicket(interaction, client, category, description);
+}
+
+// Function to handle button interactions
+async function handleButton(interaction, client) {
+  try {
+    const { customId } = interaction;
+    
+    // Create ticket button
+    if (customId === 'create_ticket') {
+      await handleTicketButton(interaction, client);
+    }
+    
+    // Ticket management buttons
+    else if (customId === 'ticket_claim' || customId === 'ticket_close' || customId === 'ticket_delete') {
+      try {
+        // Get ticket info from database
+        const channelId = interaction.channel.id;
+        const ticketResult = await db.query(
+          'SELECT * FROM tickets WHERE channel_id = $1',
+          [channelId]
+        );
+        
+        if (ticketResult.rows.length === 0) {
+          await interaction.reply({
+            content: 'This channel is not a valid ticket!',
+            ephemeral: true,
+          });
+          return;
+        }
+        
+        const ticket = ticketResult.rows[0];
+        
+        // Handle ticket actions
+        if (customId === 'ticket_claim') {
+          await handleClaimTicket(interaction, ticket);
+        } else if (customId === 'ticket_close') {
+          await handleCloseTicket(interaction, ticket);
+        } else if (customId === 'ticket_delete') {
+          await handleDeleteTicket(interaction, ticket);
+        }
+      } catch (error) {
+        logger.error('Error handling ticket button:', error);
+        await interaction.reply({
+          content: 'An error occurred while processing the ticket action. Please try again.',
+          ephemeral: true,
+        });
+      }
+    }
+  } catch (error) {
+    logger.error('Error handling button interaction:', error);
+    await interaction.reply({
+      content: 'An error occurred while processing this button. Please try again.',
+      ephemeral: true,
+    });
+  }
+}
+
+// Function to handle the initial ticket creation button
+async function handleTicketButton(interaction, client) {
+  try {
+    // Create a dropdown for selecting ticket category
+    const categorySelect = new ActionRowBuilder()
+      .addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId('ticket_category_select')
+          .setPlaceholder('Select ticket category')
+          .addOptions([
+            {
+              label: 'Buy',
+              value: 'buy',
+              description: 'Click for making a purchase',
+              emoji: '🛒',
+            },
+            {
+              label: 'General Support',
+              value: 'general',
+              description: 'General questions and help',
+              emoji: '🧊',
+            },
+            {
+              label: 'Order Issues',
+              value: 'order',
+              description: 'Problems with orders',
+              emoji: '📦',
+            },
+            {
+              label: 'Technical Support',
+              value: 'technical',
+              description: 'Technical difficulties',
+              emoji: '⚙️',
+            },
+          ])
+      );
+    
+    await interaction.reply({
+      content: 'Please select a category for your ticket:',
+      components: [categorySelect],
+      ephemeral: true,
+    });
+  } catch (error) {
+    logger.error('Error handling ticket button:', error);
+    await interaction.reply({
+      content: 'An error occurred while creating your ticket. Please try again.',
+      ephemeral: true,
+    });
+  }
+}
+
+// Function to handle ticket claim button
+async function handleClaimTicket(interaction, ticket) {
+  // Check if ticket is already claimed
+  if (ticket.claimed_by) {
+    const claimer = await interaction.guild.members.fetch(ticket.claimed_by).catch(() => null);
+    await interaction.reply({
+      content: `This ticket is already claimed by ${claimer ? claimer.user.tag : 'a staff member'}!`,
+      ephemeral: true,
+    });
+    return;
+  }
+  
+  // Update ticket in database
+  await db.query(
+    `UPDATE tickets 
+     SET claimed_by = $1, 
+         updated_at = CURRENT_TIMESTAMP 
+     WHERE id = $2`,
+    [interaction.user.id, ticket.id]
+  );
+  
+  // Send confirmation
+  const embed = new EmbedBuilder()
+    .setTitle('👋 Ticket Claimed')
+    .setDescription(`This ticket has been claimed by <@${interaction.user.id}>`)
+    .setColor(0x3498DB) // Blue
+    .setTimestamp();
+  
+  await interaction.reply({ embeds: [embed] });
+  
+  logger.info(`Ticket ${ticket.ticket_id} claimed by ${interaction.user.tag}`);
+}
 
 // Function to directly create a ticket from the dropdown selection
-// Updated createTicket function for the dropdown with clean channel names
-
-// Function to directly create a ticket from the dropdown selection
-// Updated createTicket function for the dropdown
-
-// Function to directly create a ticket from the dropdown selection
-// Updated createTicket function for the dropdown with fixed title and category
-
-// Function to directly create a ticket from the dropdown selection
-async function createTicket(interaction, client, categoryValue) {
+async function createTicket(interaction, client, categoryValue, description = 'No description provided') {
   try {
     const guild = interaction.guild;
     const userId = interaction.user.id;
-    const description = 'No description provided'; // Default for dropdown selection
 
     // Get category info
     const categoryInfo = getCategoryInfo(categoryValue);
@@ -243,299 +433,18 @@ async function createTicket(interaction, client, categoryValue) {
     await interaction.followUp({ embeds: [confirmEmbed], ephemeral: true });
 
     // Log ticket creation
-    logger.info(`Ticket created: ${ticketId} by ${interaction.user.tag} in ${guild.name}`);
+    logger.info(`Ticket ${ticketId} created by ${interaction.user.tag}`);
 
-    // Send log to log channel if configured
-    if (config.log_channel_id) {
-      const logChannel = guild.channels.cache.get(config.log_channel_id);
-      if (logChannel) {
-        const logEmbed = new EmbedBuilder()
-          .setTitle('❄️ New Ticket Created')
-          .addFields(
-            { name: 'Ticket ID', value: ticketId, inline: true },
-            { name: 'User', value: `<@${userId}>`, inline: true },
-            { name: 'Category', value: categoryInfo.label, inline: true },
-            { name: 'Channel', value: `<#${ticketChannel.id}>`, inline: true }
-          )
-          .setColor(0x87CEEB) // Secondary color
-          .setTimestamp();
-
-        await logChannel.send({ embeds: [logEmbed] });
-      }
-    }
   } catch (error) {
     logger.error('Error creating ticket:', error);
     await interaction.followUp({
-      content: 'An error occurred while creating your ticket. Please try again later.',
+      content: 'An error occurred while creating your ticket. Please try again or contact an administrator.',
       ephemeral: true
     });
   }
 }
 
-// Handle slash commands
-async function handleCommand(interaction, client) {
-  const command = client.commands.get(interaction.commandName);
-
-  if (!command) {
-    logger.warn(`Unknown command: ${interaction.commandName}`);
-    return;
-  }
-
-  try {
-    // Check cooldowns
-    const { cooldowns } = client;
-    if (!cooldowns.has(command.data.name)) {
-      cooldowns.set(command.data.name, new Map());
-    }
-
-    const now = Date.now();
-    const timestamps = cooldowns.get(command.data.name);
-    const cooldownAmount = (command.cooldown || 3) * 1000;
-
-    if (timestamps.has(interaction.user.id)) {
-      const expirationTime = timestamps.get(interaction.user.id) + cooldownAmount;
-
-      if (now < expirationTime) {
-        const timeLeft = (expirationTime - now) / 1000;
-        await interaction.reply({
-          content: `Please wait ${timeLeft.toFixed(1)} more seconds before using \`${command.data.name}\` again.`,
-          ephemeral: true,
-        });
-        return;
-      }
-    }
-
-    timestamps.set(interaction.user.id, now);
-    setTimeout(() => timestamps.delete(interaction.user.id), cooldownAmount);
-
-    // Execute command
-    await command.execute(interaction, client);
-
-    logger.info(
-      `Command executed: ${interaction.commandName} by ${interaction.user.tag} in ${interaction.guild?.name || 'DM'
-      }`
-    );
-  } catch (error) {
-    logger.error(`Error executing command ${interaction.commandName}:`, error);
-
-    const errorMessage = 'There was an error executing this command!';
-
-    if (interaction.replied || interaction.deferred) {
-      await interaction.followUp({ content: errorMessage, ephemeral: true });
-    } else {
-      await interaction.reply({ content: errorMessage, ephemeral: true });
-    }
-  }
-}
-
-// Handle ticket creation
-async function handleTicketCreation(interaction, client) {
-  const guild = interaction.guild;
-  const userId = interaction.user.id;
-
-  try {
-    // Check if user has too many open tickets
-    const openTicketsResult = await db.query(
-      'SELECT COUNT(*) FROM tickets WHERE user_id = $1 AND guild_id = $2 AND status = $3',
-      [userId, guild.id, 'open']
-    );
-
-    const openTicketCount = parseInt(openTicketsResult.rows[0].count);
-
-    // Get guild config
-    const configResult = await db.query(
-      'SELECT * FROM ticket_config WHERE guild_id = $1',
-      [guild.id]
-    );
-
-    const config = configResult.rows[0] || { max_open_tickets: 5, ticket_prefix: 'TICKET' };
-
-    if (openTicketCount >= (config.max_open_tickets || 5)) {
-      await interaction.reply({
-        content: `❌ You already have ${openTicketCount} open ticket(s). Please close some before creating new ones.`,
-        ephemeral: true
-      });
-      return;
-    }
-
-    // Show category selection with categories matching the panel
-    const categorySelect = new ActionRowBuilder()
-      .addComponents(
-        new StringSelectMenuBuilder()
-          .setCustomId('ticket_category_select')
-          .setPlaceholder('Select ticket category')
-          .addOptions([
-            {
-              label: 'Buy',
-              description: 'Click for making a purchase',
-              value: 'buy',
-              emoji: '🛒'
-            },
-            {
-              label: 'General Support',
-              description: 'General questions and help',
-              value: 'general',
-              emoji: '🧊'
-            },
-            {
-              label: 'Order Issues',
-              description: 'Problems with orders',
-              value: 'order',
-              emoji: '📦'
-            },
-            {
-              label: 'Technical Support',
-              description: 'Technical difficulties',
-              value: 'technical',
-              emoji: '⚙️'
-            }
-          ])
-      );
-
-    await interaction.reply({
-      content: 'Please select a category for your ticket:',
-      components: [categorySelect],
-      ephemeral: true
-    });
-  } catch (error) {
-    logger.error('Error creating ticket from panel:', error);
-    await interaction.reply({
-      content: 'An error occurred while creating your ticket. Please try again.',
-      ephemeral: true
-    });
-  }
-}
-
-// Handle button interactions
-async function handleButton(interaction, client) {
-  const { customId } = interaction;
-
-  try {
-    // Handle ticket panel button
-    if (customId === 'create_ticket') {
-      await handleTicketCreation(interaction, client);
-      return;
-    }
-
-    // Handle ticket-related buttons (existing code)
-    if (customId.startsWith('ticket_')) {
-      await handleTicketButton(interaction, client);
-    }
-  } catch (error) {
-    logger.error(`Error handling button ${customId}:`, error);
-    await interaction.reply({
-      content: 'An error occurred while processing your request.',
-      ephemeral: true,
-    });
-  }
-}
-
-// Handle ticket-specific button interactions
-async function handleTicketButton(interaction, client) {
-  const { customId, guild, channel, user } = interaction;
-
-  if (!guild || !channel) {
-    await interaction.reply({
-      content: 'This button can only be used in a guild channel!',
-      ephemeral: true,
-    });
-    return;
-  }
-
-  // Get ticket info from database
-  const ticketResult = await db.query(
-    'SELECT * FROM tickets WHERE channel_id = $1',
-    [channel.id]
-  );
-
-  if (ticketResult.rows.length === 0) {
-    await interaction.reply({
-      content: 'This channel is not a valid ticket channel!',
-      ephemeral: true,
-    });
-    return;
-  }
-
-  const ticket = ticketResult.rows[0];
-
-  switch (customId) {
-    case 'ticket_claim':
-      await handleClaimTicket(interaction, ticket);
-      break;
-    case 'ticket_close':
-      await handleCloseTicket(interaction, ticket);
-      break;
-    case 'ticket_delete':
-      await handleDeleteTicket(interaction, ticket);
-      break;
-  }
-}
-
-// Implementations of ticket button handlers (these are the same as your existing code)
-// Updated ticket button handlers with clean channel names
-
-// Update the handleClaimTicket function
-async function handleClaimTicket(interaction, ticket) {
-  // Check if user has permission to claim tickets
-  const member = interaction.guild.members.cache.get(interaction.user.id);
-
-  const configResult = await db.query(
-    'SELECT support_role_id FROM ticket_config WHERE guild_id = $1',
-    [interaction.guild.id]
-  );
-
-  const config = configResult.rows[0];
-
-  if (config?.support_role_id) {
-    if (!member?.roles.cache.has(config.support_role_id)) {
-      await interaction.reply({
-        content: 'You do not have permission to claim tickets!',
-        ephemeral: true,
-      });
-      return;
-    }
-  } else if (!member?.permissions.has(PermissionFlagsBits.ManageThreads)) {
-    await interaction.reply({
-      content: 'You do not have permission to claim tickets!',
-      ephemeral: true,
-    });
-    return;
-  }
-
-  if (ticket.claimed_by) {
-    await interaction.reply({
-      content: `This ticket is already claimed by <@${ticket.claimed_by}>`,
-      ephemeral: true,
-    });
-    return;
-  }
-
-  // Update ticket in database
-  await db.query(
-    'UPDATE tickets SET claimed_by = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
-    [interaction.user.id, ticket.id]
-  );
-
-  // Extract the ticket number to maintain clean channel naming
-  const ticketNumber = ticket.ticket_id.split('-')[1];
-
-  // Update channel name with clean format - claimed
-  const channel = interaction.channel;
-  await channel.setName(`claimed-${ticketNumber.toLowerCase()}`);
-
-  // Send confirmation
-  const embed = new EmbedBuilder()
-    .setTitle('🎫 Ticket Claimed')
-    .setDescription(`This ticket has been claimed by <@${interaction.user.id}>`)
-    .setColor(0x00FF00)
-    .setTimestamp();
-
-  await interaction.reply({ embeds: [embed] });
-
-  logger.info(`Ticket ${ticket.ticket_id} claimed by ${interaction.user.tag}`);
-}
-
-// Update the handleCloseTicket function
+// Function to handle closing a ticket
 async function handleCloseTicket(interaction, ticket) {
   // Check if user can close the ticket
   const isTicketOwner = ticket.user_id === interaction.user.id;
@@ -612,79 +521,7 @@ async function handleCloseTicket(interaction, ticket) {
   }, 5 * 60 * 1000); // 5 minutes
 }
 
-async function handleCloseTicket(interaction, ticket) {
-  // Check if user can close the ticket
-  const isTicketOwner = ticket.user_id === interaction.user.id;
-  const isStaff = interaction.memberPermissions?.has(PermissionFlagsBits.ManageThreads);
-  const isClaimer = ticket.claimed_by === interaction.user.id;
-
-  if (!isTicketOwner && !isStaff && !isClaimer) {
-    await interaction.reply({
-      content: 'You do not have permission to close this ticket!',
-      ephemeral: true,
-    });
-    return;
-  }
-
-  if (ticket.status === 'closed') {
-    await interaction.reply({
-      content: 'This ticket is already closed!',
-      ephemeral: true,
-    });
-    return;
-  }
-
-  // Update ticket in database
-  await db.query(
-    `UPDATE tickets 
-     SET status = 'closed', 
-         closed_by = $1, 
-         closed_at = CURRENT_TIMESTAMP,
-         updated_at = CURRENT_TIMESTAMP 
-     WHERE id = $2`,
-    [interaction.user.id, ticket.id]
-  );
-
-  // Update channel name and permissions
-  const channel = interaction.channel;
-  await channel.setName(`🔒-${ticket.ticket_id.toLowerCase()}`);
-
-  // Remove send messages permission for ticket owner
-  await channel.permissionOverwrites.edit(ticket.user_id, {
-    SendMessages: false,
-  });
-
-  // Send confirmation
-  const embed = new EmbedBuilder()
-    .setTitle('🔒 Ticket Closed')
-    .setDescription(`This ticket has been closed by <@${interaction.user.id}>`)
-    .setColor(0xFF0000)
-    .setTimestamp()
-    .setFooter({ text: 'This channel will be deleted in 5 minutes if not reopened.' });
-
-  await interaction.reply({ embeds: [embed] });
-
-  logger.info(`Ticket ${ticket.ticket_id} closed by ${interaction.user.tag}`);
-
-  // Schedule deletion after 5 minutes
-  setTimeout(async () => {
-    // Check if ticket is still closed
-    const checkResult = await db.query(
-      'SELECT status FROM tickets WHERE id = $1',
-      [ticket.id]
-    );
-
-    if (checkResult.rows[0]?.status === 'closed') {
-      try {
-        await channel.delete('Ticket closed for more than 5 minutes');
-        await db.query('DELETE FROM tickets WHERE id = $1', [ticket.id]);
-      } catch (error) {
-        logger.error(`Failed to delete closed ticket channel: ${error}`);
-      }
-    }
-  }, 5 * 60 * 1000); // 5 minutes
-}
-
+// Function to handle deleting a ticket
 async function handleDeleteTicket(interaction, ticket) {
   // Only staff can delete tickets
   if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageChannels)) {
