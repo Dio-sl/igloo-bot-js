@@ -7,7 +7,7 @@ const {
 
 const { db } = require('../../../database/Database');
 const { logger } = require('../../../utils/logger');
-const SetupUI = require('../SetupUI');  // Capital 'U' in 'UI'
+const SetupUI = require('./setupUI');
 
 module.exports = {
   // Show the general setup menu
