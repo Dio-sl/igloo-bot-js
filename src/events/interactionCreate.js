@@ -1,4 +1,4 @@
-// Fixed interactionCreate.js with proper handling for channel selection dropdown
+// Enhanced fix for interactionCreate.js - catching ALL dropdown interactions
 const {
   Events,
   PermissionFlagsBits,
@@ -20,51 +20,73 @@ module.exports = {
       // Handle slash commands
       if (interaction.isChatInputCommand()) {
         await handleCommand(interaction, client);
+        return;
       }
 
       // Handle button interactions
       if (interaction.isButton()) {
         await handleButton(interaction, client);
+        return;
       }
 
-      // Handle ALL select menu interactions
-      // Using isSelectMenu() or checking componentType to catch all select menu types
-      if (interaction.isStringSelectMenu() || (interaction.componentType === 3)) {
-        // Handle channel selection for setup
-        if (interaction.customId === 'setup_channel_select') {
-          // This is called when a channel is selected from the dropdown
-          // The processing logic is already in the setup.js file
-          // We don't need to do anything here because the collector in setup.js handles it
-          return;
-        }
+      // ULTRA-AGGRESSIVE DROPDOWN FIX
+      // Handle ANY select menu interaction regardless of type
+      if (interaction.componentType === 3 || 
+          interaction.isStringSelectMenu || 
+          (typeof interaction.isStringSelectMenu === 'function' && interaction.isStringSelectMenu()) ||
+          interaction.customId?.includes('select') ||
+          interaction.customId?.includes('channel')) {
+        
+        logger.info(`Handling select menu interaction with customId: ${interaction.customId}`);
+        
         // Handle ticket category selection
-        else if (interaction.customId === 'ticket_category_select') {
+        if (interaction.customId === 'ticket_category_select') {
           try {
             // Defer to keep the interaction alive
-            await interaction.deferUpdate();
+            await interaction.deferUpdate().catch(err => logger.warn('Could not defer update:', err));
             const selected = Array.isArray(interaction.values) && interaction.values.length
               ? interaction.values[0]
               : 'general';
 
-            // Get category display info
-            const categoryInfo = getCategoryInfo(selected);
-
-            // We'll handle the ticket creation directly here instead of trying to reuse the command
-            // This fixes the "ticketCreateCmd.execute is not a function" error
-            // Pass just the category value, not the entire categoryInfo object
+            // Create the ticket with the selected category
             await createTicket(interaction, client, selected);
-
           } catch (error) {
             logger.error('Error handling ticket category select:', error);
             try {
               if (!interaction.replied && !interaction.deferred) {
-                await interaction.reply({ content: 'Failed to create the ticket. Try /ticket manually.', ephemeral: true });
+                await interaction.reply({ content: 'Failed to create the ticket. Try /ticket manually.', ephemeral: true })
+                  .catch(err => logger.warn('Could not reply:', err));
               } else {
-                await interaction.followUp({ content: 'Failed to create the ticket. Try /ticket manually.', ephemeral: true });
+                await interaction.followUp({ content: 'Failed to create the ticket. Try /ticket manually.', ephemeral: true })
+                  .catch(err => logger.warn('Could not follow up:', err));
               }
             } catch (replyError) {
               logger.error('Error sending failure message:', replyError);
             }
+          }
+          return;
+        } 
+        // SUPER IMPORTANT: If it's any other select menu, just acknowledge it and let the collector handle it
+        else {
+          try {
+            // Just acknowledge the interaction to prevent the "interaction failed" error
+            // This is crucial - it keeps the interaction alive for other handlers
+            await interaction.deferUpdate().catch(err => {
+              logger.warn(`Could not defer update for ${interaction.customId}:`, err);
+              // If we can't defer, try to acknowledge in a different way
+              if (!interaction.replied && !interaction.deferred) {
+                interaction.reply({ content: 'Processing...', ephemeral: true })
+                  .catch(e => logger.warn('Could not reply after defer failed:', e));
+              }
+            });
+            
+            // Log that we're letting the collector handle it
+            logger.info(`Acknowledged select menu interaction ${interaction.customId}, letting collector handle it`);
+            
+            // Don't do anything else - the collector in setup.js will handle the actual processing
+            return;
+          } catch (error) {
+            logger.error(`Error acknowledging select menu ${interaction.customId}:`, error);
           }
         }
       }
@@ -75,7 +97,7 @@ module.exports = {
           await interaction.reply({ 
             content: 'An error occurred while processing this interaction. Please try again.', 
             ephemeral: true 
-          });
+          }).catch(err => logger.warn('Could not send error message:', err));
         }
       } catch (replyError) {
         logger.error('Error sending error message:', replyError);
