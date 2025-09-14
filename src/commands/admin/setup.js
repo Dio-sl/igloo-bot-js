@@ -16,7 +16,7 @@ const branding = require('../../config/branding');
 // Import setup modules
 const TicketSetup = require('./setup/ticketSetup');
 const ShopSetup = require('./setup/ShopSetup');
-const GeneralSetup = require('./setup/generalSetup');
+const GeneralSetup = require('./setup/GeneralSetup');
 const SetupUI = require('./setup/setupUI');
 
 module.exports = {
@@ -81,7 +81,7 @@ module.exports = {
     if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
       return await interaction.reply({
         content: '❌ You need Administrator permission to use this command.',
-        ephemeral: true,
+        flags: 64, // ephemeral flag
       });
     }
 
@@ -101,21 +101,20 @@ module.exports = {
         default:
           await interaction.reply({
             content: '❌ Unknown subcommand. Please use `/setup panel`.',
-            ephemeral: true,
+            flags: 64, // ephemeral flag
           });
       }
     } catch (error) {
       logger.error('Error in setup command:', error);
+      const errorMessage = { 
+        content: '❌ An error occurred. Please try again later.',
+        flags: 64 // ephemeral flag
+      };
+      
       if (interaction.replied || interaction.deferred) {
-        await interaction.followUp({
-          content: '❌ An error occurred. Please try again later.',
-          ephemeral: true,
-        });
+        await interaction.followUp(errorMessage);
       } else {
-        await interaction.reply({
-          content: '❌ An error occurred. Please try again later.',
-          ephemeral: true,
-        });
+        await interaction.reply(errorMessage);
       }
     }
   },
@@ -123,60 +122,76 @@ module.exports = {
   async handleSetupPanel(interaction, client) {
     const guildId = interaction.guild.id;
     
-    // Get current configuration
-    const config = await this.getGuildConfig(guildId);
-    
-    // Create main setup embed
-    const embed = SetupUI.createMainEmbed(client, interaction.guild, config);
-    
-    // Create menu components
-    const menuRow = SetupUI.createCategoryMenu();
-    const actionRow = SetupUI.createMainActionButtons();
+    try {
+      // Get current configuration
+      const config = await this.getGuildConfig(guildId);
+      
+      // Create main setup embed
+      const embed = SetupUI.createMainEmbed(client, interaction.guild, config);
+      
+      // Create menu components
+      const menuRow = SetupUI.createCategoryMenu();
+      const actionRow = SetupUI.createMainActionButtons();
 
-    // Send the setup panel
-    await interaction.reply({
-      embeds: [embed],
-      components: [menuRow, actionRow],
-      ephemeral: true,
-    });
+      // Send the setup panel
+      const response = await interaction.reply({
+        embeds: [embed],
+        components: [menuRow, actionRow],
+        flags: 64, // ephemeral flag
+      });
 
-    // Handle interactions with a simple router
-    const filter = (i) => i.user.id === interaction.user.id;
-    const collector = interaction.channel.createMessageComponentCollector({
-      filter,
-      time: 10 * 60 * 1000, // 10 minutes
-    });
+      // Set up interaction collector
+      const filter = (i) => i.user.id === interaction.user.id;
+      const collector = response.createMessageComponentCollector({
+        filter,
+        time: 10 * 60 * 1000, // 10 minutes
+      });
 
-    collector.on('collect', async (componentInteraction) => {
-      try {
-        // Route interactions to appropriate handlers
-        await this.routeInteraction(componentInteraction, client, interaction.guild.id);
-      } catch (error) {
-        logger.error('Error handling setup interaction:', error);
-        try {
-          if (componentInteraction.replied || componentInteraction.deferred) {
-            await componentInteraction.followUp({
-              content: '❌ An error occurred. Please try again.',
-              ephemeral: true,
-            });
-          } else {
-            await componentInteraction.reply({
-              content: '❌ An error occurred. Please try again.',
-              ephemeral: true,
-            });
-          }
-        } catch (err) {
-          logger.error('Error sending error message:', err);
+      collector.on('collect', async (componentInteraction) => {
+        // Defer the interaction immediately to prevent timeout
+        if (!componentInteraction.deferred && !componentInteraction.replied) {
+          await componentInteraction.deferUpdate();
         }
-      }
-    });
 
-    collector.on('end', () => {
-      // Disable components when expired
-      SetupUI.disableComponents(interaction).catch(err => 
-        logger.error('Error disabling components:', err)
-      );
-    });
+        try {
+          // Route interactions to appropriate handlers
+          await this.routeInteraction(componentInteraction, client, guildId);
+        } catch (error) {
+          logger.error('Error handling setup interaction:', error);
+          
+          // Only send error message if we haven't already responded
+          if (!componentInteraction.replied) {
+            try {
+              await componentInteraction.editReply({
+                content: '❌ An error occurred. Please try again.',
+                embeds: [],
+                components: [],
+              });
+            } catch (editError) {
+              logger.error('Error sending error message:', editError);
+            }
+          }
+        }
+      });
+
+      collector.on('end', () => {
+        // Disable components when expired
+        try {
+          SetupUI.disableComponents(interaction);
+        } catch (error) {
+          logger.error('Error disabling components:', error);
+        }
+      });
+
+    } catch (error) {
+      logger.error('Error in handleSetupPanel:', error);
+      if (!interaction.replied) {
+        await interaction.reply({
+          content: '❌ Failed to load setup panel. Please check database connection.',
+          flags: 64, // ephemeral flag
+        });
+      }
+    }
   },
 
   async routeInteraction(interaction, client, guildId) {
@@ -197,6 +212,12 @@ module.exports = {
         case 'general':
           await GeneralSetup.showMenu(interaction, client, config);
           break;
+        default:
+          await interaction.editReply({
+            content: '❌ Unknown category selected.',
+            embeds: [],
+            components: [],
+          });
       }
       return;
     }
@@ -225,7 +246,7 @@ module.exports = {
       const menuRow = SetupUI.createCategoryMenu();
       const actionRow = SetupUI.createMainActionButtons();
 
-      await interaction.update({
+      await interaction.editReply({
         embeds: [embed],
         components: [menuRow, actionRow],
       });
@@ -242,17 +263,31 @@ module.exports = {
     } else {
       // Handle unknown interactions
       logger.warn('Unknown interaction customId:', customId);
-      if (!interaction.replied && !interaction.deferred) {
-        await interaction.reply({
-          content: '❌ Unknown interaction. Please try again.',
-          ephemeral: true,
-        });
-      }
+      await interaction.editReply({
+        content: '❌ Unknown interaction. Please try again.',
+        embeds: [],
+        components: [],
+      });
     }
   },
 
   async getGuildConfig(guildId) {
     try {
+      // Create the table if it doesn't exist
+      await db.query(`
+        CREATE TABLE IF NOT EXISTS guild_configs (
+          id SERIAL PRIMARY KEY,
+          guild_id VARCHAR(20) NOT NULL UNIQUE,
+          ticket_category_id VARCHAR(20),
+          support_role_id VARCHAR(20),
+          log_channel_id VARCHAR(20),
+          shop_channel_id VARCHAR(20),
+          customer_role_id VARCHAR(20),
+          created_at TIMESTAMP DEFAULT NOW(),
+          updated_at TIMESTAMP DEFAULT NOW()
+        )
+      `);
+
       const result = await db.query(
         'SELECT * FROM guild_configs WHERE guild_id = $1',
         [guildId]
